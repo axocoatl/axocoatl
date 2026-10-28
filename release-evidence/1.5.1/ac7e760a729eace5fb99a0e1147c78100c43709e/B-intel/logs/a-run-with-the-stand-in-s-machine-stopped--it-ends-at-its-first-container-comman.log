@@ -1,0 +1,2 @@
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+axocoatl run: first local start could not prove containers exposing control-plane root '/private/tmp/axo-adm.EwR1LW/Library/Application Support/Axocoatl/data' absent: OCI container execution failed: listing legacy Axocoatl containers: podman stand-in (running): `podman ps -a --no-trunc --filter name=axo-ses- --format {{.ID}}	{{.Names}}` is not available in Tier B

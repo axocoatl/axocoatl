@@ -1,0 +1,1959 @@
+{
+  "schema": "axocoatl.release-evidence/1",
+  "version": "1.5.1",
+  "commit": "ac7e760a729eace5fb99a0e1147c78100c43709e",
+  "created_at": "2026-10-28T21:09:38.320Z",
+  "paths": {
+    "A-arm": {
+      "file": "A-arm.json",
+      "pass": true
+    },
+    "A-x86-refusal": {
+      "file": "A-x86-refusal.json",
+      "pass": true
+    },
+    "A-x86": {
+      "file": "A-x86.json",
+      "pass": true
+    },
+    "B-arm": {
+      "file": "B-arm.json",
+      "pass": true
+    },
+    "B-intel": {
+      "file": "B-intel.json",
+      "pass": true
+    },
+    "C1-browser-webkit": {
+      "file": "C1-browser-webkit.json",
+      "pass": true
+    }
+  },
+  "files": [
+    {
+      "path": "A-arm.json",
+      "sha256": "ec0cb8318ba05744d8c04c01d19d278b71f3cf4e0405299dbcb30b10d94afd87",
+      "bytes": 30941
+    },
+    {
+      "path": "A-arm/ci-run.json",
+      "sha256": "23006cf61e7d0e021109d1b2f35eede89d4146ebc19c41247739e1ab0e1fac3a",
+      "bytes": 536
+    },
+    {
+      "path": "A-arm/doctor-no-subuid.json",
+      "sha256": "eb1e35908ba02e1a2dc0a2ca29bcc40767f69f410bc0bf15b8493c5e70af2e64",
+      "bytes": 6504
+    },
+    {
+      "path": "A-arm/doctor.json",
+      "sha256": "cd21e5da1d1812867915071f62ebd7ee90dc9b01fa9f6904eaad687b8c6165dc",
+      "bytes": 5235
+    },
+    {
+      "path": "A-arm/go/changes.txt",
+      "sha256": "d7ccfba6a377b95524003f40d46de43da8ce01df35591ff99ffc2dba1c3b4c36",
+      "bytes": 363
+    },
+    {
+      "path": "A-arm/go/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/go/evidence-directory.txt",
+      "sha256": "7e8545a7f64002fa8068ea2f72ff198da33cf74f6be1fe0d47561b18e350a55b",
+      "bytes": 47
+    },
+    {
+      "path": "A-arm/go/junit.xml",
+      "sha256": "6d46107d3b40d921027d08c7b864859f85b837fdfb5ec1556e67187fd316569e",
+      "bytes": 2401
+    },
+    {
+      "path": "A-arm/go/receipt.json",
+      "sha256": "b9ecc0635c1e896d24029b77a6bd0d2b712a8dece860b9c3219f6e6a36072c71",
+      "bytes": 4728
+    },
+    {
+      "path": "A-arm/go/run.axorecord.jsonl",
+      "sha256": "9048e9d32fe6650c7503c70e884411f55bb6c7f87537ed70d707d55e7c63afe3",
+      "bytes": 141913
+    },
+    {
+      "path": "A-arm/go/run.log",
+      "sha256": "e866cf7c36f29b72ef9a049ecd488938015ab0d3d55122ebbfb8742ed993bb18",
+      "bytes": 5663
+    },
+    {
+      "path": "A-arm/install-command.txt",
+      "sha256": "73d0275603aac321135ada10923165fe45197b8dd09c2edda1a3328d95585b84",
+      "bytes": 47
+    },
+    {
+      "path": "A-arm/logs/a-check-program-that-is-absent--exit-3.log",
+      "sha256": "e2bd965094e5a5de92ec6e7af2d86cc05d986dd1e6a5ff2ec5b298cc30218d33",
+      "bytes": 971
+    },
+    {
+      "path": "A-arm/logs/copy-paste-lint--scripts-check-copy-paste.mjs-.log",
+      "sha256": "0c0322fe3d8457d1d691a3d213db69e411c3e110805ce86bc0a249a7168115c1",
+      "bytes": 87
+    },
+    {
+      "path": "A-arm/logs/dev.log",
+      "sha256": "d3a2a5dde5c6216c08f2ba2be7896c2edfedbe52b776aa6854afde5321a0add5",
+      "bytes": 11363
+    },
+    {
+      "path": "A-arm/logs/doctor---json-says-ready.log",
+      "sha256": "ec02f9dfb7c7c87e0a97095553d45c3fe464154457344968165ceba29af7c433",
+      "bytes": 108
+    },
+    {
+      "path": "A-arm/logs/doctor---json-without-a-subuid-range.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "A-arm/logs/doctor-exits-0.log",
+      "sha256": "8c99fb4a9a689ce5e1895254bb993a559636ebc00ffed1e5d9ca4c9082780f32",
+      "bytes": 2711
+    },
+    {
+      "path": "A-arm/logs/guard.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "A-arm/logs/install-curl-urls.log",
+      "sha256": "13a241034bb33e8b1cc9c837dcad9aab92d30827acb4ccc9f06265486d19b6d2",
+      "bytes": 311
+    },
+    {
+      "path": "A-arm/logs/install-the-lint-s-YAML-parser--npm-ci-in-sites-docs-.log",
+      "sha256": "37a441d3b1290d2bc24475ccfb2194d016fb1c0ce915d499329c8771d0e4f4e0",
+      "bytes": 26
+    },
+    {
+      "path": "A-arm/logs/install.log",
+      "sha256": "6e852ce89f2e13c547c6c8bbb62026fe733c0b10d747d96678078a7a1875a22c",
+      "bytes": 508
+    },
+    {
+      "path": "A-arm/logs/onboard---yes---writer-ollama-with-no-terminal.log",
+      "sha256": "f87e7a0e79a2d49e2cfdf29af98c7c7b0f32c1938eed455817c42421d7f04848",
+      "bytes": 3040
+    },
+    {
+      "path": "A-arm/logs/onboard-without-Podman--exit-1.log",
+      "sha256": "20cfec1d61788a24356ff997cca5dd6933d857aec189c1814cab5464fe69b6bf",
+      "bytes": 2332
+    },
+    {
+      "path": "A-arm/logs/onboard-without-a-subuid-range--exit-1.log",
+      "sha256": "d1321f21d8164d31b60fe1e081936b6003227b20108d8fb575c9bca72d474d26",
+      "bytes": 2905
+    },
+    {
+      "path": "A-arm/logs/onboarding/onboard-20261028-203252.log",
+      "sha256": "3cdf20943fc5ef22d9bf5d6fc808fc7d0994a036674670d2894de2c412fe585b",
+      "bytes": 3301
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-go.log",
+      "sha256": "5ce42ad7b9c5c7805b80818b32e990ec58f4c734037bd4bf8a85745d1e1fb20c",
+      "bytes": 326
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-node-deps.log",
+      "sha256": "add626e02b7d233764b071793b5df0df8a9ec7fb06007a07d816708d71429b2e",
+      "bytes": 333
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-node-plain.log",
+      "sha256": "8b9b96a30821b637e078e601fee4e7b6b57d425c7e7b5ec2146bd61fd8cce8e1",
+      "bytes": 317
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-node-pnpm.log",
+      "sha256": "fe52c5e4aaad1f615f1fceecf091ca33ae8d0d4ffacb93ae62a5b3d6329f18e5",
+      "bytes": 333
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-node-yarn-berry.log",
+      "sha256": "c4b1140bfe3dd6bdd553ed6ca6cba4f17d783096cb0ee129ad60e130aadd32ba",
+      "bytes": 339
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-node-yarn.log",
+      "sha256": "742de5886b7fa0507b4940409de415d240ec459bb435554c80e7cbcb2745007b",
+      "bytes": 333
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-python-hatch.log",
+      "sha256": "4679a6b66389d682c9150478acf96f6e7adf20866a40c89e1812be22629031bd",
+      "bytes": 336
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-python-pdm.log",
+      "sha256": "d2bef007f1b4be518a2aae8680db9723f68404e27e79e4ab6f4af96a214150fa",
+      "bytes": 334
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-python-poetry.log",
+      "sha256": "0e2a4acd9ef6c137853851f98c12be5a815ef0878b7b349a2a077f9ad2874d02",
+      "bytes": 337
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-python-pytest.log",
+      "sha256": "133f5b56ccd482051aca982cb39b5a9168609301081f5b1afad6e74c4dfbb6a0",
+      "bytes": 337
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-python-uv.log",
+      "sha256": "354c72eed1b1852dc4c6710d387a9cad6f5378a3106849a60279307c8b577671",
+      "bytes": 333
+    },
+    {
+      "path": "A-arm/logs/receipt-matches-the-record-on-rust.log",
+      "sha256": "1c026d3326028db1b6bef472f7deef3ed22603bc59c05450d36ae880c0448fb3",
+      "bytes": 328
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-go--documented-command-.log",
+      "sha256": "71c7300a1a3f3b92ebe230905ca5e2cb05e067634ddcf01dddd5df88b99c9eab",
+      "bytes": 382
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-node-deps--documented-command-.log",
+      "sha256": "85140b24d920c74db07e4c31448d7b58085c27dc8c27d3418a9a42392157b53b",
+      "bytes": 389
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-node-plain--documented-command-.log",
+      "sha256": "6d484ed23d1459c7389c5ea3993eafa8e01898215617a77deee3f7cd8f723e3c",
+      "bytes": 373
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-node-pnpm--documented-command-.log",
+      "sha256": "3a555b2c81b79b618ee068df0c16b743af28ec206fa3916e129c3c865883ae42",
+      "bytes": 389
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-node-yarn--documented-command-.log",
+      "sha256": "131089ea9fd63ba662c8fd71a791ea5b39e0df1b4789076d95a326fed6d12aee",
+      "bytes": 389
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-node-yarn-berry--documented-command-.log",
+      "sha256": "24ef8a3fbb146904f04471516013b89b1a0da3372ad738d05374641d246d7e06",
+      "bytes": 395
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-python-hatch--documented-command-.log",
+      "sha256": "2393a308bbafaca96990b8016d9c478442b465a9c05fc85d0935e1700f98a123",
+      "bytes": 392
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-python-pdm--documented-command-.log",
+      "sha256": "173594a8578ba5f89b5445ed6421cdf30a8dce1906b5fb1ac8ea9841fb2c513c",
+      "bytes": 390
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-python-poetry--documented-command-.log",
+      "sha256": "c53662f65d7a679eea6c8a6a6afe0b93cdd124d901cb518a12c87ac06318d238",
+      "bytes": 393
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-python-pytest--documented-command-.log",
+      "sha256": "c49c8b6887a57a4b5a8591238e0dc2fe8591a94ba0cb4d2f8f802178260e3c73",
+      "bytes": 393
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-python-uv--documented-command-.log",
+      "sha256": "4e0e39be8f064dd807dd82ba842a020a5636a47b5e108f160b147a84eb3664db",
+      "bytes": 389
+    },
+    {
+      "path": "A-arm/logs/receipt-verify-on-rust--documented-command-.log",
+      "sha256": "5ceb62e364a180fc449f99de78c6ab76549ba3860e44d5cfb5f3eaedf1183c13",
+      "bytes": 384
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-go.log",
+      "sha256": "ad469185b3c4c507f8eee8f71a2c79983db39a9e79ebdd1c3342b3b9c1782965",
+      "bytes": 278
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-node-deps.log",
+      "sha256": "f7b766d469407cc4e015b45ed01ebf9d6d007350f1d7b44e361e786d0a9f6ce4",
+      "bytes": 278
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-node-plain.log",
+      "sha256": "42be063a07bd736d0709077c4dfae600793e8a5887e8325dbdfbf99050a7ca7d",
+      "bytes": 277
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-node-pnpm.log",
+      "sha256": "e47f477725561f76a5429e6210da9996c45b5b741ae4dfff5ad8235bd07364dc",
+      "bytes": 278
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-node-yarn-berry.log",
+      "sha256": "ea217863fdeb5d90ca9492ed389385d76f457cd54535a17180c46e2aa99b8e15",
+      "bytes": 278
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-node-yarn.log",
+      "sha256": "e425681ff101c07bc909969eba6b50e5f23c0f43fb21419bc415acd7586c7a4e",
+      "bytes": 278
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-python-hatch.log",
+      "sha256": "6e442ca0dca1d8e116ba2a2db38d58d95a0e5e43b66667e01bafe2f53c0f6909",
+      "bytes": 278
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-python-pdm.log",
+      "sha256": "651aec8c95f6984e174a2f5c57ba8a6192214bf723857c3efad609485cae59dc",
+      "bytes": 278
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-python-poetry.log",
+      "sha256": "c72676cbae629a91c9136bfd10510cf601ed267c08a5382afcd2c7bd99224c57",
+      "bytes": 278
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-python-pytest.log",
+      "sha256": "61b53efd3ff847ce7a63758e43806d1bd3a81001de0616d95393038028e326cf",
+      "bytes": 278
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-python-uv.log",
+      "sha256": "26cf3f916232d667a0f6d5860d7329fcc288059572b8de5e289e12a7576eb9ae",
+      "bytes": 278
+    },
+    {
+      "path": "A-arm/logs/record-verify-on-rust.log",
+      "sha256": "e4140e4c92547a5d924595a6fab8ed31d44ecb6195da867ceb8c3b0f9e8a25b9",
+      "bytes": 278
+    },
+    {
+      "path": "A-arm/logs/reviewer-anthropic-x--exit-3.log",
+      "sha256": "e41138e5d02cb492754df338b5cc3a45b48d4466db25c3498c346d82a226e51f",
+      "bytes": 304
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-go.log",
+      "sha256": "e866cf7c36f29b72ef9a049ecd488938015ab0d3d55122ebbfb8742ed993bb18",
+      "bytes": 5663
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-node-deps.log",
+      "sha256": "e5bacaef619b9f80164e2a397fe4ebed4a6e890d2161c6221562dab51195724d",
+      "bytes": 2967
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-node-plain.log",
+      "sha256": "7d5f6015699502be869015b479061b462ce976e8e177bebc6643e09a6fa7530c",
+      "bytes": 19148
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-node-pnpm.log",
+      "sha256": "147a69dd3144e242c5ccf418b30baccb73c242755ebf722753ca957ec1ee8363",
+      "bytes": 3163
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-node-yarn-berry.log",
+      "sha256": "518070d9973f216f6b0d7ebc4b1ce0f103e76204b82ec91aedfacea52e9fbf53",
+      "bytes": 3320
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-node-yarn.log",
+      "sha256": "d38e26d1bf58d983b24612d9cf582baf853b006f6b851230d5545051dfbf9b06",
+      "bytes": 3140
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-python-hatch.log",
+      "sha256": "3f2ac80669775afdb6fdc16b37fa6b3a5d44f3120b504e95df7b939114641aa6",
+      "bytes": 2994
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-python-pdm.log",
+      "sha256": "19b726c6186355879b877c95df853489d5482e6654ff5140ee259260df4011b7",
+      "bytes": 2986
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-python-poetry.log",
+      "sha256": "6c882ef8eb707ffbd2c24c67df9478f2e0ddff477c0882e52b0c8e8a1c9cd7cc",
+      "bytes": 3018
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-python-pytest.log",
+      "sha256": "a17dc7b99be69b64b57314b289f7e30a044936859bcee69f3bce9924e366c5a6",
+      "bytes": 16195
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-python-uv.log",
+      "sha256": "aa30831d34bc29ba7389a2b8b3fce2ebea591cbf82ff2646556c63e63de659f7",
+      "bytes": 2982
+    },
+    {
+      "path": "A-arm/logs/run-fix-on-rust.log",
+      "sha256": "b1e88cacf786ca0060d4c556c328c30877a6cce267f65aa3f236f7957706c15d",
+      "bytes": 15015
+    },
+    {
+      "path": "A-arm/logs/stub-model-server.jsonl",
+      "sha256": "74fc696fcb0a0701d88138639fc33f2a72e3e727ce2ea960af942d7292371ba9",
+      "bytes": 19819
+    },
+    {
+      "path": "A-arm/logs/stub-model-server.log",
+      "sha256": "d8614e84a605963b401ea858de60c4e586c0d41986278451590a6f2de4691a43",
+      "bytes": 87
+    },
+    {
+      "path": "A-arm/node-deps/changes.txt",
+      "sha256": "249b058088d4bef73811004a4f6fd382312f71efe3613b7f8dfc75dcba1d6a0c",
+      "bytes": 503
+    },
+    {
+      "path": "A-arm/node-deps/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/node-deps/evidence-directory.txt",
+      "sha256": "dfe6b4b6253d544c90548874f679aec095c82716009c39b1eba82b77dbfb4f1b",
+      "bytes": 54
+    },
+    {
+      "path": "A-arm/node-deps/junit.xml",
+      "sha256": "3712af9ce22f7b1ae5808f28848be0a87cb3dbcd66706334487ae60882ea1f35",
+      "bytes": 2333
+    },
+    {
+      "path": "A-arm/node-deps/receipt.json",
+      "sha256": "afd496ea8ea2625b63f7569f5c31325e604ecc1b87c11bd678d5f1c211b16ac3",
+      "bytes": 4700
+    },
+    {
+      "path": "A-arm/node-deps/run.axorecord.jsonl",
+      "sha256": "1ffd16acf4eeaebc03979f3323e9bbb7c406fb628f50a66d737ca4a5de3f31c1",
+      "bytes": 121291
+    },
+    {
+      "path": "A-arm/node-deps/run.log",
+      "sha256": "e5bacaef619b9f80164e2a397fe4ebed4a6e890d2161c6221562dab51195724d",
+      "bytes": 2967
+    },
+    {
+      "path": "A-arm/node-plain/axocoatl-junit.xml",
+      "sha256": "b9758a56d2b1ba1812a59cbb10583dfcc3d3fed344f954e8462d12f757558c12",
+      "bytes": 1975
+    },
+    {
+      "path": "A-arm/node-plain/changes.txt",
+      "sha256": "cd25251683add6f28f1917ad16e17df264f96990df980bbbaa094e98237fa5d4",
+      "bytes": 543
+    },
+    {
+      "path": "A-arm/node-plain/command.txt",
+      "sha256": "26a7aba76f2fe2cb4e985b5e2fcfe2dc13b78914c61e55ee6a1df626798a1865",
+      "bytes": 145
+    },
+    {
+      "path": "A-arm/node-plain/evidence-directory.txt",
+      "sha256": "89b18fa723f77f796e50049cf9775999b3bfe9dcca6be9aea03b631436669787",
+      "bytes": 55
+    },
+    {
+      "path": "A-arm/node-plain/receipt.json",
+      "sha256": "ba8c782fb9d6e8764483ee992d73c4b5d9d828c945291d7985acf54407b49b93",
+      "bytes": 4308
+    },
+    {
+      "path": "A-arm/node-plain/run.axorecord.jsonl",
+      "sha256": "41ce8a1b1754e704083d8c9d3cc6034e0f91bb0309ca3aa24221c43d26ee0aab",
+      "bytes": 147222
+    },
+    {
+      "path": "A-arm/node-plain/run.log",
+      "sha256": "7d5f6015699502be869015b479061b462ce976e8e177bebc6643e09a6fa7530c",
+      "bytes": 19148
+    },
+    {
+      "path": "A-arm/node-pnpm/changes.txt",
+      "sha256": "628dc32ff3707037df4dea0a875d23c2acca70c9de79d615baabbdf721bfa72d",
+      "bytes": 484
+    },
+    {
+      "path": "A-arm/node-pnpm/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/node-pnpm/evidence-directory.txt",
+      "sha256": "46cd3b689f00fe4ab006916f574610b8eca4e15aea02e381604a5e45794f32e1",
+      "bytes": 54
+    },
+    {
+      "path": "A-arm/node-pnpm/junit.xml",
+      "sha256": "3be398743f936e1f9f15992db0ce5dbd0266ac37c59ec52b6f3f6a8187c5b14c",
+      "bytes": 2431
+    },
+    {
+      "path": "A-arm/node-pnpm/receipt.json",
+      "sha256": "30ecffe0d13b5fde25999a26030375bc9f3ea8a337d080f773969ff9551e3c40",
+      "bytes": 4764
+    },
+    {
+      "path": "A-arm/node-pnpm/run.axorecord.jsonl",
+      "sha256": "93fe874349ac6372a864cab86c86259107a60e82dbe312e27c218d8b7e4444b2",
+      "bytes": 314732
+    },
+    {
+      "path": "A-arm/node-pnpm/run.log",
+      "sha256": "147a69dd3144e242c5ccf418b30baccb73c242755ebf722753ca957ec1ee8363",
+      "bytes": 3163
+    },
+    {
+      "path": "A-arm/node-yarn-berry/changes.txt",
+      "sha256": "589235d2f25a19cc1a2f4df657363abe8d0ddbdf3812b554505bbf9cd3b95a79",
+      "bytes": 517
+    },
+    {
+      "path": "A-arm/node-yarn-berry/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/node-yarn-berry/evidence-directory.txt",
+      "sha256": "9c7fdd757cfc48c8836138764705f4f2d26b452daf944a66677dfd1315eebe69",
+      "bytes": 60
+    },
+    {
+      "path": "A-arm/node-yarn-berry/junit.xml",
+      "sha256": "6608711f22171718e106bff54689661560d016c3e334c644074388fb50f03361",
+      "bytes": 2498
+    },
+    {
+      "path": "A-arm/node-yarn-berry/receipt.json",
+      "sha256": "c3d046d3cdc97783d4dc087329cf29f422b429394117135d1eab0e03885cfeef",
+      "bytes": 4848
+    },
+    {
+      "path": "A-arm/node-yarn-berry/run.axorecord.jsonl",
+      "sha256": "cba415072bbcef5dfac39ae391561720b7b7c4137bec26f57e88a87d51ce1aa0",
+      "bytes": 316623
+    },
+    {
+      "path": "A-arm/node-yarn-berry/run.log",
+      "sha256": "518070d9973f216f6b0d7ebc4b1ce0f103e76204b82ec91aedfacea52e9fbf53",
+      "bytes": 3320
+    },
+    {
+      "path": "A-arm/node-yarn/changes.txt",
+      "sha256": "5bb3164ba6737ad087c1092a14ff52fa6ebd6646c406ac414abf69045402d4fb",
+      "bytes": 496
+    },
+    {
+      "path": "A-arm/node-yarn/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/node-yarn/evidence-directory.txt",
+      "sha256": "680f476e37934c081f3ffca8e7ce6127106bdcbd363a8ea09d408713959f04e6",
+      "bytes": 54
+    },
+    {
+      "path": "A-arm/node-yarn/junit.xml",
+      "sha256": "da48c79948f11e55b1c2faeeef056044e18d324871292b2870a52f84dbe84f76",
+      "bytes": 2420
+    },
+    {
+      "path": "A-arm/node-yarn/receipt.json",
+      "sha256": "a2fc969558c103610ee41b2dbabb29abac9c741297fd4f526553bce56355b27a",
+      "bytes": 4756
+    },
+    {
+      "path": "A-arm/node-yarn/run.axorecord.jsonl",
+      "sha256": "8bfaf859138fe1e1de3257132e816e27bea9be22e4ca9a0a951be834c3f84036",
+      "bytes": 307125
+    },
+    {
+      "path": "A-arm/node-yarn/run.log",
+      "sha256": "d38e26d1bf58d983b24612d9cf582baf853b006f6b851230d5545051dfbf9b06",
+      "bytes": 3140
+    },
+    {
+      "path": "A-arm/python-hatch/changes.txt",
+      "sha256": "9bb354605b0e38f72b3e16cd8ccc2a85f9358f3e19fb5588207a8a46ab732fc6",
+      "bytes": 505
+    },
+    {
+      "path": "A-arm/python-hatch/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/python-hatch/evidence-directory.txt",
+      "sha256": "93f9e69e32d1c2099a8fa432aa2b5666742b2e5846ea120a85973792b4474012",
+      "bytes": 57
+    },
+    {
+      "path": "A-arm/python-hatch/junit.xml",
+      "sha256": "8ebf4c764bc7f2974fe360e3869257684587a95a93b94e1de70647bff224d159",
+      "bytes": 2352
+    },
+    {
+      "path": "A-arm/python-hatch/receipt.json",
+      "sha256": "434d47f6aeb6e775c1d2d1dfa5ca12de39c459843073e6d636eb15bf1d1b816e",
+      "bytes": 4736
+    },
+    {
+      "path": "A-arm/python-hatch/run.axorecord.jsonl",
+      "sha256": "b9908e70b047e414c552505d7b6fd91385bac240aa1184007f6d7975bba1ff05",
+      "bytes": 219645
+    },
+    {
+      "path": "A-arm/python-hatch/run.log",
+      "sha256": "3f2ac80669775afdb6fdc16b37fa6b3a5d44f3120b504e95df7b939114641aa6",
+      "bytes": 2994
+    },
+    {
+      "path": "A-arm/python-pdm/changes.txt",
+      "sha256": "c3a18f36a3d3b448edec6febd9888635f382cc9c0bd2c6e627c4134f8af96711",
+      "bytes": 481
+    },
+    {
+      "path": "A-arm/python-pdm/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/python-pdm/evidence-directory.txt",
+      "sha256": "c8a810e28df6bccafd9f4e8a6f8070942053575079985c1db66fb91161831cf5",
+      "bytes": 55
+    },
+    {
+      "path": "A-arm/python-pdm/junit.xml",
+      "sha256": "01f308e043741768b606ad2cd3b8aae3bb02187903a9a9d27866e263c754d4b4",
+      "bytes": 2352
+    },
+    {
+      "path": "A-arm/python-pdm/receipt.json",
+      "sha256": "0f1069722b26712aac65cf1972cb2a495179cfff5cfaa670fffe574d23490c9c",
+      "bytes": 4732
+    },
+    {
+      "path": "A-arm/python-pdm/run.axorecord.jsonl",
+      "sha256": "7ba01762b03156ceba49b601875cc5ac9fe7e62498e8b716f4ba41340d4546b2",
+      "bytes": 208752
+    },
+    {
+      "path": "A-arm/python-pdm/run.log",
+      "sha256": "19b726c6186355879b877c95df853489d5482e6654ff5140ee259260df4011b7",
+      "bytes": 2986
+    },
+    {
+      "path": "A-arm/python-poetry/changes.txt",
+      "sha256": "7f6417e897e25ef5a91ec6c9e80ea58ec37de3c683a01b54fc27da26e5e5c064",
+      "bytes": 486
+    },
+    {
+      "path": "A-arm/python-poetry/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/python-poetry/evidence-directory.txt",
+      "sha256": "3bd8934b27215f299bf153fc98e8fa011d575bb26e35279898cb7de73e78c250",
+      "bytes": 58
+    },
+    {
+      "path": "A-arm/python-poetry/junit.xml",
+      "sha256": "f33ed630c874e3896c546b8b766428eae1b15a130f8d946485b489b206a22062",
+      "bytes": 2368
+    },
+    {
+      "path": "A-arm/python-poetry/receipt.json",
+      "sha256": "9b8bd84326feba12b088c06ddaa38ee28a0ac34df38098bb0adfb1d8013f04f1",
+      "bytes": 4740
+    },
+    {
+      "path": "A-arm/python-poetry/run.axorecord.jsonl",
+      "sha256": "52fd29a549c242396368b36a9b5ff31845ceb9f71bc1f05ca79505660ea8c518",
+      "bytes": 191001
+    },
+    {
+      "path": "A-arm/python-poetry/run.log",
+      "sha256": "6c882ef8eb707ffbd2c24c67df9478f2e0ddff477c0882e52b0c8e8a1c9cd7cc",
+      "bytes": 3018
+    },
+    {
+      "path": "A-arm/python-pytest/changes.txt",
+      "sha256": "d031407c8650fa4f5b0c3274dbc9a39a2ce7944f701168d7f29ba70572c18b71",
+      "bytes": 428
+    },
+    {
+      "path": "A-arm/python-pytest/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/python-pytest/evidence-directory.txt",
+      "sha256": "0f9186658157d1353479caa5b1b2a6f79af6759cf319cc036468254647cde439",
+      "bytes": 58
+    },
+    {
+      "path": "A-arm/python-pytest/junit.xml",
+      "sha256": "dd0d384555e75f3492385b4d50efab7aaeae7eefd7eba90397bc69ad9931d5bd",
+      "bytes": 2337
+    },
+    {
+      "path": "A-arm/python-pytest/receipt.json",
+      "sha256": "441f31300f228621c41f154bd8022b8b50022e04429aa77ac88adbefd5657e6c",
+      "bytes": 4712
+    },
+    {
+      "path": "A-arm/python-pytest/run.axorecord.jsonl",
+      "sha256": "14e1ac7db76a0ae4ca7b7a0a242717d9abb3df951cb6bf560994566657ef3d62",
+      "bytes": 128306
+    },
+    {
+      "path": "A-arm/python-pytest/run.log",
+      "sha256": "a17dc7b99be69b64b57314b289f7e30a044936859bcee69f3bce9924e366c5a6",
+      "bytes": 16195
+    },
+    {
+      "path": "A-arm/python-uv/changes.txt",
+      "sha256": "2e38fec884c8942f24f45b46a187634fe66d5ce0b073c4f883d89ce881d4f1ab",
+      "bytes": 494
+    },
+    {
+      "path": "A-arm/python-uv/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/python-uv/evidence-directory.txt",
+      "sha256": "de04244a44c113829ca3356f7df665330ebf2212af8d976f5b8fb6084e8d2571",
+      "bytes": 54
+    },
+    {
+      "path": "A-arm/python-uv/junit.xml",
+      "sha256": "6c8472f0bb3e9d5de25c6f15213e14bdf3c6dac19bda3406e0cc0c9014d8580c",
+      "bytes": 2352
+    },
+    {
+      "path": "A-arm/python-uv/receipt.json",
+      "sha256": "38703b6374d723f7ab19b9c9c72234db863e38663b16373b87c88d77e023e9dc",
+      "bytes": 4736
+    },
+    {
+      "path": "A-arm/python-uv/run.axorecord.jsonl",
+      "sha256": "3ed6ccddf396bc46e9044a228244e0ca357c6674b13dfe3e6972f1eab4ca66fc",
+      "bytes": 201718
+    },
+    {
+      "path": "A-arm/python-uv/run.log",
+      "sha256": "aa30831d34bc29ba7389a2b8b3fce2ebea591cbf82ff2646556c63e63de659f7",
+      "bytes": 2982
+    },
+    {
+      "path": "A-arm/readme-command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/rust/changes.txt",
+      "sha256": "b4754be4a379a3e767cfefffbf132d7d1e640b8b06242d017b55f94ff6afcdd2",
+      "bytes": 426
+    },
+    {
+      "path": "A-arm/rust/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-arm/rust/evidence-directory.txt",
+      "sha256": "73310da224b1518c524059e852a06bc3c7d08c2939b967d2ab6eb29adb1736b7",
+      "bytes": 49
+    },
+    {
+      "path": "A-arm/rust/junit.xml",
+      "sha256": "bb00d17b3ec53d1e1dd77ee6c84ba557ac7bccf6005a4516a802a63e19ecc238",
+      "bytes": 2313
+    },
+    {
+      "path": "A-arm/rust/receipt.json",
+      "sha256": "2873f9ea087ceb8ca732e6c381b3e5623fb74b88c7c51750c45671c9b64e2ba1",
+      "bytes": 4680
+    },
+    {
+      "path": "A-arm/rust/run.axorecord.jsonl",
+      "sha256": "151dc6f12af7e50bf4e96db75ca32ad5972529638b0791f03ba8f0f6d0e6ea3a",
+      "bytes": 137323
+    },
+    {
+      "path": "A-arm/rust/run.log",
+      "sha256": "b1e88cacf786ca0060d4c556c328c30877a6cce267f65aa3f236f7957706c15d",
+      "bytes": 15015
+    },
+    {
+      "path": "A-arm/transcript.txt",
+      "sha256": "6b8dbbf05b87027f956959d335e237b477e44c0e261e1e97910a9f326fc5cc64",
+      "bytes": 115986
+    },
+    {
+      "path": "A-x86-refusal.json",
+      "sha256": "9cb2d9d133e631cda2bc82d5822010342fc359c4a8f53230224c8be442a220fe",
+      "bytes": 3435
+    },
+    {
+      "path": "A-x86-refusal/ci-run.json",
+      "sha256": "23006cf61e7d0e021109d1b2f35eede89d4146ebc19c41247739e1ab0e1fac3a",
+      "bytes": 536
+    },
+    {
+      "path": "A-x86-refusal/doctor-refusal.json",
+      "sha256": "b3205f4f9c111679008dfcf1bcc0f46b0d06ea7bc0c0fcb949f25e354e911d1d",
+      "bytes": 6394
+    },
+    {
+      "path": "A-x86-refusal/install-command.txt",
+      "sha256": "73d0275603aac321135ada10923165fe45197b8dd09c2edda1a3328d95585b84",
+      "bytes": 47
+    },
+    {
+      "path": "A-x86-refusal/logs/doctor---json-is-not-ready.log",
+      "sha256": "ec02f9dfb7c7c87e0a97095553d45c3fe464154457344968165ceba29af7c433",
+      "bytes": 108
+    },
+    {
+      "path": "A-x86-refusal/logs/guard.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "A-x86-refusal/logs/install-curl-urls.log",
+      "sha256": "eb85774bc4b33a35516bc37f7867a88c2c28a19b9ee7346103f6c61a5d0056ef",
+      "bytes": 309
+    },
+    {
+      "path": "A-x86-refusal/logs/install.log",
+      "sha256": "9e87b4bc2249e8271aafe19971c2b05c9ad61acd6e737e81ec74dc017b47fb70",
+      "bytes": 507
+    },
+    {
+      "path": "A-x86-refusal/logs/onboard-refuses-this-machine--exit-1-.log",
+      "sha256": "729c52b360b243e7ae6681467b9c53f9942b75afb2d2394d70e02051061ddb3b",
+      "bytes": 2622
+    },
+    {
+      "path": "A-x86-refusal/logs/onboarding/onboard-20261028-202628.log",
+      "sha256": "05c3744465d8a1c578461a0b44e81fc5a9429180cb1aca1e9c23985233e3d9ec",
+      "bytes": 2984
+    },
+    {
+      "path": "A-x86-refusal/logs/stub-model-server.jsonl",
+      "sha256": "3923cbf15904d999957f70d4ddca421ca5c10f1062e160ea51b05e2a8b22d679",
+      "bytes": 1732
+    },
+    {
+      "path": "A-x86-refusal/logs/stub-model-server.log",
+      "sha256": "5ac6029a7822b5f4464a826a058705bfff435a10da10bdf89c4effe4cbcdc830",
+      "bytes": 87
+    },
+    {
+      "path": "A-x86-refusal/transcript.txt",
+      "sha256": "7a5a01cad0eb0c96bc43087649024d6789f11a1b4d9ab578ec19df3a19eedf95",
+      "bytes": 4175
+    },
+    {
+      "path": "A-x86.json",
+      "sha256": "0f330061b72da160b3b916ecc230e2fe5bf40506510b1776a1dd13bf0ed7ea9b",
+      "bytes": 30961
+    },
+    {
+      "path": "A-x86/ci-run.json",
+      "sha256": "23006cf61e7d0e021109d1b2f35eede89d4146ebc19c41247739e1ab0e1fac3a",
+      "bytes": 536
+    },
+    {
+      "path": "A-x86/doctor-no-subuid.json",
+      "sha256": "edfc3c388720ec6bfd5a3dfc72e1c77e571ca63ca0dc57b489550e2f317470f0",
+      "bytes": 6504
+    },
+    {
+      "path": "A-x86/doctor.json",
+      "sha256": "88bb2bd3e841e0ea62c663eec864af6277e865f939b9c66e6ad3c7cd700a5df6",
+      "bytes": 5235
+    },
+    {
+      "path": "A-x86/go/changes.txt",
+      "sha256": "d7ccfba6a377b95524003f40d46de43da8ce01df35591ff99ffc2dba1c3b4c36",
+      "bytes": 363
+    },
+    {
+      "path": "A-x86/go/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/go/evidence-directory.txt",
+      "sha256": "9ad642ae02dd49e317a85ab83c8d5bc7ee2406c7ec01e186f3a29afbbe8380fd",
+      "bytes": 47
+    },
+    {
+      "path": "A-x86/go/junit.xml",
+      "sha256": "e73dcc8ea9c9587b6f23ce6c3cd0591c07d9d00837bb709e56b9c84c039f35a9",
+      "bytes": 2401
+    },
+    {
+      "path": "A-x86/go/receipt.json",
+      "sha256": "f705f4c8fb6b8caca9fa747a9edb4bdf9c35fb59244cb90937315b2172b44710",
+      "bytes": 4728
+    },
+    {
+      "path": "A-x86/go/run.axorecord.jsonl",
+      "sha256": "34104638de2d45f13f88440ecdf633dfec0a92ac18a075ce6fbb935180238284",
+      "bytes": 141911
+    },
+    {
+      "path": "A-x86/go/run.log",
+      "sha256": "a24f4b3983fc1a82c1e2b8ad1be38e558b1d2ccd50271da56f4795fd97477866",
+      "bytes": 5664
+    },
+    {
+      "path": "A-x86/install-command.txt",
+      "sha256": "73d0275603aac321135ada10923165fe45197b8dd09c2edda1a3328d95585b84",
+      "bytes": 47
+    },
+    {
+      "path": "A-x86/logs/a-check-program-that-is-absent--exit-3.log",
+      "sha256": "e2bd965094e5a5de92ec6e7af2d86cc05d986dd1e6a5ff2ec5b298cc30218d33",
+      "bytes": 971
+    },
+    {
+      "path": "A-x86/logs/copy-paste-lint--scripts-check-copy-paste.mjs-.log",
+      "sha256": "0c0322fe3d8457d1d691a3d213db69e411c3e110805ce86bc0a249a7168115c1",
+      "bytes": 87
+    },
+    {
+      "path": "A-x86/logs/dev.log",
+      "sha256": "d657486b5cca1865166e4d2abab398aea98c5df843ab8d38a440b0d140e80ac3",
+      "bytes": 11363
+    },
+    {
+      "path": "A-x86/logs/doctor---json-says-ready.log",
+      "sha256": "ec02f9dfb7c7c87e0a97095553d45c3fe464154457344968165ceba29af7c433",
+      "bytes": 108
+    },
+    {
+      "path": "A-x86/logs/doctor---json-without-a-subuid-range.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "A-x86/logs/doctor-exits-0.log",
+      "sha256": "1e37f4ef209141e495a5ff9c54ed1d1558f0a7f062a454122521c7a29a9e32ed",
+      "bytes": 2711
+    },
+    {
+      "path": "A-x86/logs/guard.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "A-x86/logs/install-curl-urls.log",
+      "sha256": "2b88f01f723865eb507e51ac8f34faf2f64cbf9517bb673a7bb680f2241c661e",
+      "bytes": 309
+    },
+    {
+      "path": "A-x86/logs/install-the-lint-s-YAML-parser--npm-ci-in-sites-docs-.log",
+      "sha256": "0b968c66cb1b29d902ec4f64e0605022d0923cbb39afaddeef2efee88ff746de",
+      "bytes": 26
+    },
+    {
+      "path": "A-x86/logs/install.log",
+      "sha256": "9e87b4bc2249e8271aafe19971c2b05c9ad61acd6e737e81ec74dc017b47fb70",
+      "bytes": 507
+    },
+    {
+      "path": "A-x86/logs/onboard---yes---writer-ollama-with-no-terminal.log",
+      "sha256": "3b3b5e27589d58fbe038421bded3ba0117b21d945311eb3b18ada205dabdd747",
+      "bytes": 3038
+    },
+    {
+      "path": "A-x86/logs/onboard-without-Podman--exit-1.log",
+      "sha256": "404fb55d38f591412b5a87c8915ed3e4c3b6c4d6ef803500a0d9220123381286",
+      "bytes": 2330
+    },
+    {
+      "path": "A-x86/logs/onboard-without-a-subuid-range--exit-1.log",
+      "sha256": "9c7fe48ef66f72fb83e2356b50f12e1c24c6f44dcf6f9b7fcf2c475c8cdf516c",
+      "bytes": 2903
+    },
+    {
+      "path": "A-x86/logs/onboarding/onboard-20261028-203207.log",
+      "sha256": "be99e435be2bf88c61a40e5425875979c2b8815ef9d44e928a50475560b50b06",
+      "bytes": 3299
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-go.log",
+      "sha256": "6c06210a746d894d9a0d6263873264719896483ef14a9eb75f9676518d2a367a",
+      "bytes": 326
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-node-deps.log",
+      "sha256": "cb947a260198d599e3afd135eb06d6f67ef5d118a05635642cee701c69daf3fa",
+      "bytes": 333
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-node-plain.log",
+      "sha256": "6b3d51d7447543df46c49886026d8a9b0e5e8b65ce19c90dac0aed9584ca2d1c",
+      "bytes": 317
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-node-pnpm.log",
+      "sha256": "3daa4f374cb1e8e4a2f96fe9c50a37653268c8f24ae5ad559eb4d48278b241e1",
+      "bytes": 333
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-node-yarn-berry.log",
+      "sha256": "a810676d3ff98f830b3a9fe96efba70079fd10b73622ce5c3c59c1bc005f07a6",
+      "bytes": 339
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-node-yarn.log",
+      "sha256": "ef7a0ec882ae6ff0564f61c67e65adfdcdb11c142ad46d4bd83c6ddfd319b1df",
+      "bytes": 333
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-python-hatch.log",
+      "sha256": "b0d4bdd366e1e5084bd4eb4aea4a4507ac660f819ce0b1e309f836d14b4e93d1",
+      "bytes": 336
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-python-pdm.log",
+      "sha256": "b9491c995cc64c851b97aed5ab63e1cc6888f5dd1a06abe2a3014e94ff80015a",
+      "bytes": 334
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-python-poetry.log",
+      "sha256": "7ff51d6b53ccd692498a7c7a0146a27a9d5fce68038149a503656f77c099fe53",
+      "bytes": 337
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-python-pytest.log",
+      "sha256": "ca2f74039d66084eabdf8963850b0c62097bae854ba2097b5635d271918a4528",
+      "bytes": 337
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-python-uv.log",
+      "sha256": "e9ce6b8b7e7428a15f45867f6ef7391ed3a0290528c348e96b45b6585b1db7b0",
+      "bytes": 333
+    },
+    {
+      "path": "A-x86/logs/receipt-matches-the-record-on-rust.log",
+      "sha256": "897abd50feeeeae60b783dc177e29f188fad7c1d1aa8a1355ba52549c6d1bc97",
+      "bytes": 328
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-go--documented-command-.log",
+      "sha256": "c62fdf3aff94b3c4053c02e87b99664c7659de1cae2e9b3803e18b7049c8cacc",
+      "bytes": 382
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-node-deps--documented-command-.log",
+      "sha256": "828f7ac86398d110e05e984e1cc4ce9ee2b61673a43f18450611dd289cb3eeff",
+      "bytes": 389
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-node-plain--documented-command-.log",
+      "sha256": "83ec285f8b97a82d1445fbeab32dee7ba8162b8369a2f540addd990a296006bb",
+      "bytes": 373
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-node-pnpm--documented-command-.log",
+      "sha256": "d47fa15abeebff0a5fdbb0108bc7717e6fdd1cd2d3585eb546d641edda662c22",
+      "bytes": 389
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-node-yarn--documented-command-.log",
+      "sha256": "c7b866c60128deffaf155e6254481484baf31d43e24bff6488f235cd86f7d68e",
+      "bytes": 389
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-node-yarn-berry--documented-command-.log",
+      "sha256": "8b7fd644ab0bf69592235cf12869183e0501af6923cbdd6f6ccecb9e2a8fddb5",
+      "bytes": 395
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-python-hatch--documented-command-.log",
+      "sha256": "3a97735308faa0d5b24f7056633f868ce2ff9af5346af17c7654d8860aee3208",
+      "bytes": 392
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-python-pdm--documented-command-.log",
+      "sha256": "18ff2ee203530daf4a489f75754eb10aa5df5bc5a0ad5a1e10ff3369af8fe30a",
+      "bytes": 390
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-python-poetry--documented-command-.log",
+      "sha256": "6e961f9c45ab69547f29763c0486857146e361d45597d90ad58656e3bb20fbaa",
+      "bytes": 393
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-python-pytest--documented-command-.log",
+      "sha256": "c09e055f2871bab4b1a9bccfd933d6f64515027c83bd56de559f973166bcd65a",
+      "bytes": 393
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-python-uv--documented-command-.log",
+      "sha256": "e3a200270417cd4710ae9257062e434f89c2ddeb4411f86b8e7461733288b883",
+      "bytes": 389
+    },
+    {
+      "path": "A-x86/logs/receipt-verify-on-rust--documented-command-.log",
+      "sha256": "ea97ce126117b806717c36ae4d429bb4cf18d3b89cfe67070a29351a8f012056",
+      "bytes": 384
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-go.log",
+      "sha256": "224fd059ec243904ad3ceb1c860397f5bfbd161dff003091e899041ac5ffe77d",
+      "bytes": 278
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-node-deps.log",
+      "sha256": "c7000e58b283ca9a0bf8fecf1d9df98a8e8bf80729d8023f873464bbaba03278",
+      "bytes": 278
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-node-plain.log",
+      "sha256": "3dac17a9d3d6e00b4129bff737b6c27540d1062ff599215824371e6414de0113",
+      "bytes": 277
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-node-pnpm.log",
+      "sha256": "7b1c502e20f72ef68e20ac7f925eeedf9c0705f946fd5d56468168acec1aaf73",
+      "bytes": 278
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-node-yarn-berry.log",
+      "sha256": "ac5df4fedf31c740cb275d055cacdded1856e345e267a6342e93c79e8eabb9b0",
+      "bytes": 278
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-node-yarn.log",
+      "sha256": "f1ecd40111f5dedf3103025b25f14cde89111c61afa80d5052cb036f6a5bd9c6",
+      "bytes": 278
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-python-hatch.log",
+      "sha256": "cbde562f0a1c62bf60c67794e1dfb21b021fa0962fb8eb2366e23a1db00bdad3",
+      "bytes": 278
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-python-pdm.log",
+      "sha256": "6769acac1cf6d2c95fc4614756d297828d1ff8e6b2261702af0e49b678d717db",
+      "bytes": 278
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-python-poetry.log",
+      "sha256": "e96801706d8c6d4974f362dc984af55b2214c33bde100950248cbde8e37dc116",
+      "bytes": 278
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-python-pytest.log",
+      "sha256": "1e45404e320bd10526368d7212cacbb0870355a0686b5e9a721a850f18f96cd7",
+      "bytes": 278
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-python-uv.log",
+      "sha256": "8a2b229da8044e6b088e2f3340ba55ae3b8bb047c3018eea7f09887c904251cf",
+      "bytes": 278
+    },
+    {
+      "path": "A-x86/logs/record-verify-on-rust.log",
+      "sha256": "93db5e3bf70cbd2de3a8050dbe470f616cbe8ffc990229eb9c7edaef17acaa6c",
+      "bytes": 278
+    },
+    {
+      "path": "A-x86/logs/reviewer-anthropic-x--exit-3.log",
+      "sha256": "e41138e5d02cb492754df338b5cc3a45b48d4466db25c3498c346d82a226e51f",
+      "bytes": 304
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-go.log",
+      "sha256": "a24f4b3983fc1a82c1e2b8ad1be38e558b1d2ccd50271da56f4795fd97477866",
+      "bytes": 5664
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-node-deps.log",
+      "sha256": "b1617f5e182e90dd1585d98cf83f75836deb09fbcf6d07fc4ae3961795d716ed",
+      "bytes": 2967
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-node-plain.log",
+      "sha256": "e0fa63acbbcef17cc44eb49310a5e53640fa6d903a940f77e5d1d726d3bd8bf2",
+      "bytes": 19147
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-node-pnpm.log",
+      "sha256": "b862d1b59f849ed55840554f550b7f21e5df4af66b2e106ad3f8dc6c30b280ed",
+      "bytes": 3163
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-node-yarn-berry.log",
+      "sha256": "8bcd66795b805d9f22ad688fb9c072ff5d4a6f551da764a1d2e441f24eee0970",
+      "bytes": 3320
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-node-yarn.log",
+      "sha256": "7c082bcdf4a0454a3e61a406c0a667631037821b468b27958303e07a91136fcc",
+      "bytes": 3140
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-python-hatch.log",
+      "sha256": "2709551be749b10b94201a93dd7c619fc290ffe90255def0c2dc4067db143621",
+      "bytes": 2996
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-python-pdm.log",
+      "sha256": "12b7641ded833f885b200072847d74814ec6b177b2954f8f50cdcc75445d72be",
+      "bytes": 2986
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-python-poetry.log",
+      "sha256": "f278aadc9043902015563a50bfc03b4895e1f048211b3f2d32c2f2a695b6bfde",
+      "bytes": 3020
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-python-pytest.log",
+      "sha256": "42a2943579d20bcfe4991563d9a96c9cebcfa765bd52cd27b91cbc374f322a86",
+      "bytes": 16197
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-python-uv.log",
+      "sha256": "00adf4a4cfaaf115255b28d3c41d41b2a19cf6f6a2a7a995872d46b0afe4abfb",
+      "bytes": 2984
+    },
+    {
+      "path": "A-x86/logs/run-fix-on-rust.log",
+      "sha256": "2a9f7f6752cc445c7cb8b6f6ca6721fee4c3c5abf6a787d9060e74ce1aec8c35",
+      "bytes": 15014
+    },
+    {
+      "path": "A-x86/logs/stub-model-server.jsonl",
+      "sha256": "f8e6f89cd6f240210af1044cdf2577d7df41a46d1f03bd0f5d1279d079fac7b6",
+      "bytes": 19819
+    },
+    {
+      "path": "A-x86/logs/stub-model-server.log",
+      "sha256": "8d9c4a15ceeb41eaea268caef1a715ffcde03485058838926d5d6a6976de7b45",
+      "bytes": 87
+    },
+    {
+      "path": "A-x86/node-deps/changes.txt",
+      "sha256": "249b058088d4bef73811004a4f6fd382312f71efe3613b7f8dfc75dcba1d6a0c",
+      "bytes": 503
+    },
+    {
+      "path": "A-x86/node-deps/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/node-deps/evidence-directory.txt",
+      "sha256": "682b3ee681362da5d36a841d870b6d36e80d25c8d3134f140550add5eb30314c",
+      "bytes": 54
+    },
+    {
+      "path": "A-x86/node-deps/junit.xml",
+      "sha256": "bb9872a6be191dd544d89593901fededcf28e88027c7b7068c9e9aece4c6823d",
+      "bytes": 2333
+    },
+    {
+      "path": "A-x86/node-deps/receipt.json",
+      "sha256": "2f23b4b031f46b6e18080f196989bf0744b5282817150b47697fb4e359a5a690",
+      "bytes": 4700
+    },
+    {
+      "path": "A-x86/node-deps/run.axorecord.jsonl",
+      "sha256": "2f6027cb4ade16f3815faa53364b6fbb61a9a4a27602e3b85b0e831ddef2dfe0",
+      "bytes": 121288
+    },
+    {
+      "path": "A-x86/node-deps/run.log",
+      "sha256": "b1617f5e182e90dd1585d98cf83f75836deb09fbcf6d07fc4ae3961795d716ed",
+      "bytes": 2967
+    },
+    {
+      "path": "A-x86/node-plain/axocoatl-junit.xml",
+      "sha256": "1c8c26a0a68612ebb1caa900f6f2c31d00e0fb12ad032b4e0d9a5423f7861054",
+      "bytes": 1975
+    },
+    {
+      "path": "A-x86/node-plain/changes.txt",
+      "sha256": "cd25251683add6f28f1917ad16e17df264f96990df980bbbaa094e98237fa5d4",
+      "bytes": 543
+    },
+    {
+      "path": "A-x86/node-plain/command.txt",
+      "sha256": "26a7aba76f2fe2cb4e985b5e2fcfe2dc13b78914c61e55ee6a1df626798a1865",
+      "bytes": 145
+    },
+    {
+      "path": "A-x86/node-plain/evidence-directory.txt",
+      "sha256": "2f6b9b8394c0cda2073eee1f4837c57583525e0558d17a3d2b7b9d8deaba02bc",
+      "bytes": 55
+    },
+    {
+      "path": "A-x86/node-plain/receipt.json",
+      "sha256": "012739ecbf247d595f36c99c006aafe716691c549434bbc08a5b51f13b68325a",
+      "bytes": 4308
+    },
+    {
+      "path": "A-x86/node-plain/run.axorecord.jsonl",
+      "sha256": "2cbc48d4d31cafc2bc9996d87f821dc6cdc7c287f642633350fb2e1dcd622a5a",
+      "bytes": 147222
+    },
+    {
+      "path": "A-x86/node-plain/run.log",
+      "sha256": "e0fa63acbbcef17cc44eb49310a5e53640fa6d903a940f77e5d1d726d3bd8bf2",
+      "bytes": 19147
+    },
+    {
+      "path": "A-x86/node-pnpm/changes.txt",
+      "sha256": "628dc32ff3707037df4dea0a875d23c2acca70c9de79d615baabbdf721bfa72d",
+      "bytes": 484
+    },
+    {
+      "path": "A-x86/node-pnpm/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/node-pnpm/evidence-directory.txt",
+      "sha256": "7dc302cbc0c60a29d600c25ac2c7486e6b3374a2cbff2dc7271d410eab9138d9",
+      "bytes": 54
+    },
+    {
+      "path": "A-x86/node-pnpm/junit.xml",
+      "sha256": "4d7c66c49a5b61c5b8bae1ca5a93031219ffbb548c6454d56d04a93df9d7a2c9",
+      "bytes": 2431
+    },
+    {
+      "path": "A-x86/node-pnpm/receipt.json",
+      "sha256": "ed7a90b2ef9eca90e0ad2419b2a76b4bf24c755e5e20105665dd4aba783bc5b8",
+      "bytes": 4764
+    },
+    {
+      "path": "A-x86/node-pnpm/run.axorecord.jsonl",
+      "sha256": "b7a6d746a36480e015d9a84cb8a28405f6b045280f4e2fd8780d11340ea4c9e0",
+      "bytes": 314734
+    },
+    {
+      "path": "A-x86/node-pnpm/run.log",
+      "sha256": "b862d1b59f849ed55840554f550b7f21e5df4af66b2e106ad3f8dc6c30b280ed",
+      "bytes": 3163
+    },
+    {
+      "path": "A-x86/node-yarn-berry/changes.txt",
+      "sha256": "589235d2f25a19cc1a2f4df657363abe8d0ddbdf3812b554505bbf9cd3b95a79",
+      "bytes": 517
+    },
+    {
+      "path": "A-x86/node-yarn-berry/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/node-yarn-berry/evidence-directory.txt",
+      "sha256": "d96772e514612f237e6075d3d0078f96b8c1a252f0564ff7506eef8d0ecef89a",
+      "bytes": 60
+    },
+    {
+      "path": "A-x86/node-yarn-berry/junit.xml",
+      "sha256": "625db819694558e91d59017a876e53d90f618c7ac7ee99425547a69370c0ef06",
+      "bytes": 2498
+    },
+    {
+      "path": "A-x86/node-yarn-berry/receipt.json",
+      "sha256": "62ad53352a0fee9f11a757246ab333702636d59b159a521d1a2d2108eb3364af",
+      "bytes": 4848
+    },
+    {
+      "path": "A-x86/node-yarn-berry/run.axorecord.jsonl",
+      "sha256": "006db8a8094f772887de6d75ccf766423e1a4dd50c57f3f237c1ce9000aa6f5f",
+      "bytes": 316629
+    },
+    {
+      "path": "A-x86/node-yarn-berry/run.log",
+      "sha256": "8bcd66795b805d9f22ad688fb9c072ff5d4a6f551da764a1d2e441f24eee0970",
+      "bytes": 3320
+    },
+    {
+      "path": "A-x86/node-yarn/changes.txt",
+      "sha256": "5bb3164ba6737ad087c1092a14ff52fa6ebd6646c406ac414abf69045402d4fb",
+      "bytes": 496
+    },
+    {
+      "path": "A-x86/node-yarn/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/node-yarn/evidence-directory.txt",
+      "sha256": "6de38a4c4b96f835f5a410169e0d2bd6a9037dfb3fb207f7bc15bfc84e75577e",
+      "bytes": 54
+    },
+    {
+      "path": "A-x86/node-yarn/junit.xml",
+      "sha256": "76adaa00282b86216b735d12356a5a1af38511f730d20e0cddc3bcd9a358e69e",
+      "bytes": 2420
+    },
+    {
+      "path": "A-x86/node-yarn/receipt.json",
+      "sha256": "65650301fa099021a5a3c7a3c0bf5e1d1ea0c60344090f9f1e632c5840c6b1b4",
+      "bytes": 4756
+    },
+    {
+      "path": "A-x86/node-yarn/run.axorecord.jsonl",
+      "sha256": "efed46375efde573bf0ef721cfeda20d44ae04ab673c9fc6ab3e1a9bd666b746",
+      "bytes": 307127
+    },
+    {
+      "path": "A-x86/node-yarn/run.log",
+      "sha256": "7c082bcdf4a0454a3e61a406c0a667631037821b468b27958303e07a91136fcc",
+      "bytes": 3140
+    },
+    {
+      "path": "A-x86/python-hatch/changes.txt",
+      "sha256": "9bb354605b0e38f72b3e16cd8ccc2a85f9358f3e19fb5588207a8a46ab732fc6",
+      "bytes": 505
+    },
+    {
+      "path": "A-x86/python-hatch/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/python-hatch/evidence-directory.txt",
+      "sha256": "e06ebc4ab0633ed7431784d5eec383d66cebbb7a74967f1c7c53d529866da9b1",
+      "bytes": 57
+    },
+    {
+      "path": "A-x86/python-hatch/junit.xml",
+      "sha256": "269f812004cf0f9243f740e8414bda18eb3363174f789091431a683d7dbefe1a",
+      "bytes": 2353
+    },
+    {
+      "path": "A-x86/python-hatch/receipt.json",
+      "sha256": "4cc80d70dcf0490973e3bdb0525195e4971aefc17ad77fe975d4c70650a44fac",
+      "bytes": 4736
+    },
+    {
+      "path": "A-x86/python-hatch/run.axorecord.jsonl",
+      "sha256": "51d659adfcb9c3b21ec1322648815b1077917ef0ec16e28e90402f98d0006ab3",
+      "bytes": 219470
+    },
+    {
+      "path": "A-x86/python-hatch/run.log",
+      "sha256": "2709551be749b10b94201a93dd7c619fc290ffe90255def0c2dc4067db143621",
+      "bytes": 2996
+    },
+    {
+      "path": "A-x86/python-pdm/changes.txt",
+      "sha256": "c3a18f36a3d3b448edec6febd9888635f382cc9c0bd2c6e627c4134f8af96711",
+      "bytes": 481
+    },
+    {
+      "path": "A-x86/python-pdm/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/python-pdm/evidence-directory.txt",
+      "sha256": "14cd59beec538b4d62c49e17eade7a16c85e92d68d9328d4875cfa7ca07824c2",
+      "bytes": 55
+    },
+    {
+      "path": "A-x86/python-pdm/junit.xml",
+      "sha256": "37da3caab38a06c727433f310820344e9b30e18105bbe3cbd5561a4a8b0033d7",
+      "bytes": 2352
+    },
+    {
+      "path": "A-x86/python-pdm/receipt.json",
+      "sha256": "68634dd098c39d1f4da02b062da34c4c5bb8faf051a74a9887a45ee25b11cf53",
+      "bytes": 4732
+    },
+    {
+      "path": "A-x86/python-pdm/run.axorecord.jsonl",
+      "sha256": "21143dbf2f709797b425d317e465d7d9af085ab7b19dc6c33b5e08d06f4b9637",
+      "bytes": 208751
+    },
+    {
+      "path": "A-x86/python-pdm/run.log",
+      "sha256": "12b7641ded833f885b200072847d74814ec6b177b2954f8f50cdcc75445d72be",
+      "bytes": 2986
+    },
+    {
+      "path": "A-x86/python-poetry/changes.txt",
+      "sha256": "7f6417e897e25ef5a91ec6c9e80ea58ec37de3c683a01b54fc27da26e5e5c064",
+      "bytes": 486
+    },
+    {
+      "path": "A-x86/python-poetry/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/python-poetry/evidence-directory.txt",
+      "sha256": "1adf96f9b4c7f74f8860de8a475cbd9c98758f4b6e2728834ce812d7194a22a1",
+      "bytes": 58
+    },
+    {
+      "path": "A-x86/python-poetry/junit.xml",
+      "sha256": "59116e590037bf8166d79fa15aeba5350ecdc4c197d5ddee61590e6a4fe3d7a5",
+      "bytes": 2369
+    },
+    {
+      "path": "A-x86/python-poetry/receipt.json",
+      "sha256": "8db59c8d4149f078e5760e6c99d9f19131496cc2c8d0148dea1b95ff6986e125",
+      "bytes": 4740
+    },
+    {
+      "path": "A-x86/python-poetry/run.axorecord.jsonl",
+      "sha256": "07cf7bd5ed5e8952f6fc3694d402df7632708c8416a3396c673cc86850d1c40a",
+      "bytes": 190883
+    },
+    {
+      "path": "A-x86/python-poetry/run.log",
+      "sha256": "f278aadc9043902015563a50bfc03b4895e1f048211b3f2d32c2f2a695b6bfde",
+      "bytes": 3020
+    },
+    {
+      "path": "A-x86/python-pytest/changes.txt",
+      "sha256": "d031407c8650fa4f5b0c3274dbc9a39a2ce7944f701168d7f29ba70572c18b71",
+      "bytes": 428
+    },
+    {
+      "path": "A-x86/python-pytest/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/python-pytest/evidence-directory.txt",
+      "sha256": "8bf112cf668dd35d1a5b29634b662c82ac9d412ffad660654005c4ee2452d52d",
+      "bytes": 58
+    },
+    {
+      "path": "A-x86/python-pytest/junit.xml",
+      "sha256": "9e0e6832f449cdaadf10016afb38363a50b4bdedaca189c36ee0653943771d14",
+      "bytes": 2338
+    },
+    {
+      "path": "A-x86/python-pytest/receipt.json",
+      "sha256": "0c37a4c77ffa2f40b6efb7a1f5041c1d98ed8afd2af95a013328f6b35d50b24a",
+      "bytes": 4712
+    },
+    {
+      "path": "A-x86/python-pytest/run.axorecord.jsonl",
+      "sha256": "dda39407aef9999d5d5deef33fe32e058a2b1ea27069a6031a90814534423c40",
+      "bytes": 128191
+    },
+    {
+      "path": "A-x86/python-pytest/run.log",
+      "sha256": "42a2943579d20bcfe4991563d9a96c9cebcfa765bd52cd27b91cbc374f322a86",
+      "bytes": 16197
+    },
+    {
+      "path": "A-x86/python-uv/changes.txt",
+      "sha256": "2e38fec884c8942f24f45b46a187634fe66d5ce0b073c4f883d89ce881d4f1ab",
+      "bytes": 494
+    },
+    {
+      "path": "A-x86/python-uv/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/python-uv/evidence-directory.txt",
+      "sha256": "d54a7d41dcae3a8fd386c2751777e1372584dcca25b019c3a65d5b6d97b8b314",
+      "bytes": 54
+    },
+    {
+      "path": "A-x86/python-uv/junit.xml",
+      "sha256": "d23cd89e898ade3b71af26b2161e15b64af0abaec03686762441115ad2f90a12",
+      "bytes": 2353
+    },
+    {
+      "path": "A-x86/python-uv/receipt.json",
+      "sha256": "431312555406af66141049dc1a7649470fc5d7708948e3f10a6d599ee47ca7b0",
+      "bytes": 4740
+    },
+    {
+      "path": "A-x86/python-uv/run.axorecord.jsonl",
+      "sha256": "8164aa9624f60feb43ee7db6c9970d3566b91d9a2337b1618b760d27b02fd362",
+      "bytes": 201546
+    },
+    {
+      "path": "A-x86/python-uv/run.log",
+      "sha256": "00adf4a4cfaaf115255b28d3c41d41b2a19cf6f6a2a7a995872d46b0afe4abfb",
+      "bytes": 2984
+    },
+    {
+      "path": "A-x86/readme-command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/rust/changes.txt",
+      "sha256": "b4754be4a379a3e767cfefffbf132d7d1e640b8b06242d017b55f94ff6afcdd2",
+      "bytes": 426
+    },
+    {
+      "path": "A-x86/rust/command.txt",
+      "sha256": "365257dc9d0ee5b5b637057301e85132686986cb478f64ab34b73110ab394916",
+      "bytes": 217
+    },
+    {
+      "path": "A-x86/rust/evidence-directory.txt",
+      "sha256": "ecdac85ee77d59dc49cc720eac1806ce600e19b5ed1d342ae08f490a9f16012e",
+      "bytes": 49
+    },
+    {
+      "path": "A-x86/rust/junit.xml",
+      "sha256": "758cd95d8c79010b4acf84366dcf11f9f904481d24c28ca997123ca62af45e1d",
+      "bytes": 2313
+    },
+    {
+      "path": "A-x86/rust/receipt.json",
+      "sha256": "9c20a2fd3e455230e15108aa92b4f46666e3b5504235567dfce5019d4fe0fd11",
+      "bytes": 4680
+    },
+    {
+      "path": "A-x86/rust/run.axorecord.jsonl",
+      "sha256": "ab37b543e5ca8b218898e47e39b073e0137f6e2c2a2a82d49f0543161ce4d90b",
+      "bytes": 137319
+    },
+    {
+      "path": "A-x86/rust/run.log",
+      "sha256": "2a9f7f6752cc445c7cb8b6f6ca6721fee4c3c5abf6a787d9060e74ce1aec8c35",
+      "bytes": 15014
+    },
+    {
+      "path": "A-x86/transcript.txt",
+      "sha256": "53dacdf17bcfb66424bfa8e2eb91af032ce6d76df78e2763bd42ada00e4dee2f",
+      "bytes": 115988
+    },
+    {
+      "path": "B-arm.json",
+      "sha256": "1b95b84fa9277ea2a797263fcf2eb872ab6312777207112e6dddefe7ce47cdf5",
+      "bytes": 7826
+    },
+    {
+      "path": "B-arm/ci-run.json",
+      "sha256": "23006cf61e7d0e021109d1b2f35eede89d4146ebc19c41247739e1ab0e1fac3a",
+      "bytes": 536
+    },
+    {
+      "path": "B-arm/doctor-no-machine.json",
+      "sha256": "353ea77ffde111469db9045822c0b9d95a5487791da2ff1dade7b58aaf2055c6",
+      "bytes": 5928
+    },
+    {
+      "path": "B-arm/doctor-none-no-brew.json",
+      "sha256": "9969fbce53e288c96e13d25701581259e40dbf1363c2a3e8ed34a2b46455fc37",
+      "bytes": 5733
+    },
+    {
+      "path": "B-arm/doctor-none.json",
+      "sha256": "420a17aca9162fe1d50059db7752812daab42e8795b39192375809dda61aeb1c",
+      "bytes": 5585
+    },
+    {
+      "path": "B-arm/doctor-podman6.json",
+      "sha256": "33770e3b4cbfa8af4566848ec7bf558b40c20b581b07655db5bfa07324179f0e",
+      "bytes": 5666
+    },
+    {
+      "path": "B-arm/doctor-rootful.json",
+      "sha256": "6d2ca9299228c4c9316ceb02534b3b6ea67c27bd44c6da1b3b4a52573d23a3a4",
+      "bytes": 6244
+    },
+    {
+      "path": "B-arm/doctor-running.json",
+      "sha256": "53989ec29e84257745234d3296024e4d1e6702bf4675ae106fc11092d496f1c0",
+      "bytes": 5622
+    },
+    {
+      "path": "B-arm/doctor-stopped.json",
+      "sha256": "48726ab066004052578701871efccb2631f423eb84057d28acdcb6c4142c852c",
+      "bytes": 5611
+    },
+    {
+      "path": "B-arm/install-command.txt",
+      "sha256": "73d0275603aac321135ada10923165fe45197b8dd09c2edda1a3328d95585b84",
+      "bytes": 47
+    },
+    {
+      "path": "B-arm/logs/a-run-with-the-stand-in-s-machine-stopped--it-ends-at-its-first-container-comman.log",
+      "sha256": "ea1ffb3817ec50b60f412f3bf4af0a7bfbbf75fbe162000fb68a73b7122bb709",
+      "bytes": 569
+    },
+    {
+      "path": "B-arm/logs/admission-dev.log",
+      "sha256": "5ff53d8efc2dace06d5c86ff89d083ca703289d43cb41dde169e87589fe3451c",
+      "bytes": 2816
+    },
+    {
+      "path": "B-arm/logs/doctor-no-machine.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-arm/logs/doctor-none-no-brew.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-arm/logs/doctor-none.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-arm/logs/doctor-podman6.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-arm/logs/doctor-rootful.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-arm/logs/doctor-running.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-arm/logs/doctor-stopped.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-arm/logs/install-curl-urls.log",
+      "sha256": "121076d431e29e6dbd7575b34dd6a29d4a7c36e45e432f24265685676bbe19b1",
+      "bytes": 471
+    },
+    {
+      "path": "B-arm/logs/install.log",
+      "sha256": "4d8e4869419f6594840b20fc6bfbb9a465dd956fea1f0cd73173f145ede142cd",
+      "bytes": 1550
+    },
+    {
+      "path": "B-arm/logs/onboard-plan-no-machine.log",
+      "sha256": "808a34d7870e24246944ef1976ba43bc287a24894d04f2777d8c31008ca37415",
+      "bytes": 6433
+    },
+    {
+      "path": "B-arm/logs/onboard-plan-none-no-brew.log",
+      "sha256": "521484b981082df9daa20bf5299302392495c27d386717ddde99bf2b08a9592b",
+      "bytes": 5694
+    },
+    {
+      "path": "B-arm/logs/onboard-plan-none.log",
+      "sha256": "63d795e5e50b3915182557c99876f1955abfbf9c8ed1ded5c73a507065e2c848",
+      "bytes": 6570
+    },
+    {
+      "path": "B-arm/logs/onboard-plan-stopped.log",
+      "sha256": "c8424925779871d460315e0a32461110c752c2bd5d570664e38b54420bc120f8",
+      "bytes": 6141
+    },
+    {
+      "path": "B-arm/logs/podman-calls.log",
+      "sha256": "bc00f8375874e8af9b16fef1f4c7f2c3e90527faee81afe6f2630fa8b735955d",
+      "bytes": 3118
+    },
+    {
+      "path": "B-arm/logs/stub-model-server.jsonl",
+      "sha256": "606499190b283fa07bb8f48fcc0f65a9cd336c9ec8979dcd425dbf6690186adf",
+      "bytes": 866
+    },
+    {
+      "path": "B-arm/logs/stub-model-server.log",
+      "sha256": "aaa8c68533c9954d5992c10a277c22845ca9b7c584389d3c4170b0f6acf1b774",
+      "bytes": 87
+    },
+    {
+      "path": "B-arm/transcript.txt",
+      "sha256": "91b9f2eef5a335ec64d570c3a00deb20ef1dd26b52a480eb7858fe605836e644",
+      "bytes": 4308
+    },
+    {
+      "path": "B-intel.json",
+      "sha256": "fbc46418a8e0bf6986bae042ce1511e969a4c2d60da801414e478e9ae2ca0f4d",
+      "bytes": 7133
+    },
+    {
+      "path": "B-intel/ci-run.json",
+      "sha256": "23006cf61e7d0e021109d1b2f35eede89d4146ebc19c41247739e1ab0e1fac3a",
+      "bytes": 536
+    },
+    {
+      "path": "B-intel/doctor-no-machine.json",
+      "sha256": "fcc94bd60e067a2d28806600d99f01005ce8498c343b480debfc5bbdc33f5e02",
+      "bytes": 5981
+    },
+    {
+      "path": "B-intel/doctor-none.json",
+      "sha256": "e4f70d3586cc9ba1a7356a174ee0decd055a0733dafe76c421d47ce1ad4ec610",
+      "bytes": 5922
+    },
+    {
+      "path": "B-intel/doctor-podman6.json",
+      "sha256": "dc9a5f5897d641a97ded697809d1f359865819cfbbcf7b05047ff8bfdbf6b81c",
+      "bytes": 5719
+    },
+    {
+      "path": "B-intel/doctor-rootful.json",
+      "sha256": "2df6c66fb549b0b8067dbf564a6328f2e40e28a53a4260615adf42426bb28341",
+      "bytes": 6297
+    },
+    {
+      "path": "B-intel/doctor-running.json",
+      "sha256": "c6a9de996434f5a49ba63f4c4ea78359d5f17da2afff7822c53a1c22906309ce",
+      "bytes": 5675
+    },
+    {
+      "path": "B-intel/doctor-stopped.json",
+      "sha256": "3031d71e81a8abd1e8f2f2bdae97d62e3335970f147b80b3fab944c074a05f4f",
+      "bytes": 5664
+    },
+    {
+      "path": "B-intel/install-command.txt",
+      "sha256": "73d0275603aac321135ada10923165fe45197b8dd09c2edda1a3328d95585b84",
+      "bytes": 47
+    },
+    {
+      "path": "B-intel/logs/a-run-with-the-stand-in-s-machine-stopped--it-ends-at-its-first-container-comman.log",
+      "sha256": "9878d947cabcb265e2876e32fbf0ed6ad3a4361dbeee888c66c434e5b540c121",
+      "bytes": 569
+    },
+    {
+      "path": "B-intel/logs/admission-dev.log",
+      "sha256": "c1a1382c3ae2e79d94dd46a0993cc1ee2c1d2d3b18905206719aa640f1663452",
+      "bytes": 2816
+    },
+    {
+      "path": "B-intel/logs/doctor-no-machine.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-intel/logs/doctor-none.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-intel/logs/doctor-podman6.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-intel/logs/doctor-rootful.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-intel/logs/doctor-running.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-intel/logs/doctor-stopped.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "B-intel/logs/install-curl-urls.log",
+      "sha256": "8eac066f53dc1606e5068d4b70c653dff675d39eb3d73564b8b4116007e3fe48",
+      "bytes": 469
+    },
+    {
+      "path": "B-intel/logs/install.log",
+      "sha256": "0536eab51f6515c172e5aa476c0184fb63eed819d3fd18da48a6f9f1584a768d",
+      "bytes": 1549
+    },
+    {
+      "path": "B-intel/logs/onboard-plan-no-machine.log",
+      "sha256": "a061bb98d87001a65a010ee4a887780f64d4cdb07dbd577d39a55ebddbd0e741",
+      "bytes": 6573
+    },
+    {
+      "path": "B-intel/logs/onboard-plan-none.log",
+      "sha256": "29bcf62eb44170bfa047c1cb5e424474886cf673116f5e4e8811f693ffbe610b",
+      "bytes": 5901
+    },
+    {
+      "path": "B-intel/logs/onboard-plan-stopped.log",
+      "sha256": "a8299be8818ac496ac11efefb126ee8b134e25e91766fad575631d6faf80e1b3",
+      "bytes": 6283
+    },
+    {
+      "path": "B-intel/logs/podman-calls.log",
+      "sha256": "bc2a7de14fe373fe03e2186f25c2e4871f4b5fb788876f45c47aa84bed1079a0",
+      "bytes": 3110
+    },
+    {
+      "path": "B-intel/logs/stub-model-server.jsonl",
+      "sha256": "efaf4a00bd80b308a3ab536063107f8240954fbb2f34a4dccd2a61f01c270877",
+      "bytes": 866
+    },
+    {
+      "path": "B-intel/logs/stub-model-server.log",
+      "sha256": "708c78a2800e45a2af7f4838443451e0daec923fa90ab6bd43b6d72fcb1eeb52",
+      "bytes": 87
+    },
+    {
+      "path": "B-intel/transcript.txt",
+      "sha256": "db6fb29f610bc71ce40e374c68a09b3e366c0da6deb6eab935904ac478db58b4",
+      "bytes": 4126
+    },
+    {
+      "path": "C1-browser-webkit.json",
+      "sha256": "dda0d43c83ca2a3772324b4dfdbeac76c65341b4670ccc438429223500e59989",
+      "bytes": 1939
+    },
+    {
+      "path": "C1-browser-webkit/logs/Podman-answers.log",
+      "sha256": "42688a497a6616c9674736ea8af458b0af9a89b5f7309076f9743dfdbcf72e2d",
+      "bytes": 12
+    },
+    {
+      "path": "C1-browser-webkit/logs/product-browser-journeys-in-WebKit-on-macOS-with-Podman.log",
+      "sha256": "2febc3964708d21dff85ddc56e4c5cd895bb5b4dbc8fa7eed29dac2426fda9e6",
+      "bytes": 81865
+    },
+    {
+      "path": "C1-browser-webkit/logs/unpack-the-candidate-s-binary.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-browser-webkit/transcript.txt",
+      "sha256": "52b7576811070258a5df009e33bfb685f8fd22bed76805fd4dc772a15c6a62e8",
+      "bytes": 82453
+    }
+  ]
+}

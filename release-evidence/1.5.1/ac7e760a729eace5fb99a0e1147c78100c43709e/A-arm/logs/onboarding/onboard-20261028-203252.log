@@ -1,0 +1,72 @@
+Axocoatl setup
+Every command this runs is logged to /tmp/axo-gate.rnJ30x/home/.local/state/axocoatl/onboard-20261028-203252.log
+
+Step 0 · This computer
+$ /usr/bin/git --version
+  exit 0
+  | git version 2.56.0
+
+$ systemctl --user is-system-running
+  exit 0
+  | running
+
+$ loginctl show-user runner --property=Linger --value
+  exit 0
+  | yes
+
+This computer: Ubuntu 24.04.5 LTS, aarch64, 16 GB memory, 4 cores, 109 GB free.
+Found: Podman 4.9.3 (ready), Ollama 0.40.6 at http://127.0.0.1:45859 (cloud models off), gh, git 2.56.0.
+Not found: claude, codex.
+
+Step 1 · Who writes the code
+  Writer: A local model on this computer (Ollama, no account, needs 48 GB memory or more) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+  ✓ Landlock ABI 8
+  Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start from, and runs it rootless with your user mapped in and no network. yes (--yes)
+$ podman pull docker.io/library/alpine:3.20
+  exit 0
+$ podman run --rm --pull=never --userns=keep-id:uid=1000,gid=1000 --user 1000:1000 --network=none --cap-drop=all --security-opt=no-new-privileges docker.io/library/alpine:3.20 id -u
+  exit 0
+  | 1000
+
+  ✓ Sandbox ready: Podman 4.9.3, rootless, Landlock ABI 8
+
+Step 3 · A local writer and reviewer (Ollama)
+  ✓ Ollama 0.40.6 at http://127.0.0.1:45859, cloud models off (2 models installed)
+  ✓ qwen3-coder:30b is installed
+  ✓ gpt-oss:20b is installed
+  Loading qwen3-coder:30b once to read its context…
+  ✓ qwen3-coder:30b: 32768-token context, contract probes passed
+  Loading gpt-oss:20b once to read its context…
+  ✓ gpt-oss:20b: 32768-token context, contract probes passed
+
+Step 4 · The configuration
+  The new configuration sets:
+    `axocoatl run fix`: writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b
+    Workbench Sessions: Lead, Scout and the chat Assistant on ollama:qwen3-coder:30b, Reviewer on ollama:gpt-oss:20b
+    Ollama server: http://127.0.0.1:45859
+    Workbench port: 8200
+wrote /tmp/axo-gate.rnJ30x/home/.config/axocoatl/config.yaml
+  ✓ Configuration written: /tmp/axo-gate.rnJ30x/home/.config/axocoatl/config.yaml
+  ✓ Data: /tmp/axo-gate.rnJ30x/home/.local/share/axocoatl
+
+Step 5 · Check
+$ /usr/bin/gh auth status
+  exit 1
+  | You are not logged into any GitHub hosts. To log in, run: gh auth login
+
+  ! gh: not signed in; `axocoatl run --keep pr` needs it
+  ! Daemon: no daemon running; `axocoatl run` and the workbench need one
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead ollama:qwen3-coder:30b)
+Ready: yes
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)

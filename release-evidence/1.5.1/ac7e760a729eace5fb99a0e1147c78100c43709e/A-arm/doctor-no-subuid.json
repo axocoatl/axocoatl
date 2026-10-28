@@ -1,0 +1,197 @@
+{
+  "ready": false,
+  "config": "/tmp/axo-gate.rnJ30x/home/.config/axocoatl/config.yaml",
+  "sections": {
+    "sandbox": [
+      {
+        "name": "Podman",
+        "status": "ok",
+        "detail": "Podman 4.9.3 ready (rootless; kernel 7.0.0-1017-azure), needed for every Session and every axocoatl run",
+        "fix": null
+      },
+      {
+        "name": "User ID ranges",
+        "status": "fail",
+        "detail": "runner has no range of subordinate user and group IDs in /etc/subuid and /etc/subgid, so rootless Podman cannot unpack images or start Sessions",
+        "fix": "sudo usermod --add-subuids 165536-231071 --add-subgids 165536-231071 runner && podman system migrate"
+      },
+      {
+        "name": "Landlock",
+        "status": "ok",
+        "detail": "Landlock ABI 8",
+        "fix": null
+      },
+      {
+        "name": "Platform",
+        "status": "ok",
+        "detail": "Ubuntu 24.04.5 LTS, as the release gate verifies",
+        "fix": null
+      },
+      {
+        "name": "Platform",
+        "status": "warn",
+        "detail": "16 GB of memory: local models have not been verified below 48 GB",
+        "fix": null
+      },
+      {
+        "name": "Sandbox network",
+        "status": "ok",
+        "detail": "Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)",
+        "fix": null
+      },
+      {
+        "name": "Sandbox workload",
+        "status": "ok",
+        "detail": "Sandbox workload: image (commands run as the image's own user)",
+        "fix": null
+      }
+    ],
+    "models": [
+      {
+        "name": "Ollama",
+        "status": "ok",
+        "detail": "Ollama 0.40.6 at http://127.0.0.1:45859, a version native Sessions accept",
+        "fix": null
+      },
+      {
+        "name": "Ollama",
+        "status": "ok",
+        "detail": "Ollama cloud models disabled at http://127.0.0.1:45859 (~/.ollama/server.json)",
+        "fix": null
+      },
+      {
+        "name": "Model gpt-oss:20b",
+        "status": "ok",
+        "detail": "gpt-oss:20b: GGUF; 1.1 GB, fits in memory; 32768-token context, read from Ollama without loading or probing it again (a daemon is running and may be using it; a run probes it before it uses it); 1.1 GB loaded, all in GPU memory",
+        "fix": null
+      },
+      {
+        "name": "Model qwen3-coder:30b",
+        "status": "ok",
+        "detail": "qwen3-coder:30b: GGUF; 1.1 GB, fits in memory; 32768-token context, read from Ollama without loading or probing it again (a daemon is running and may be using it; a run probes it before it uses it); 1.1 GB loaded, all in GPU memory",
+        "fix": null
+      }
+    ],
+    "writers": [
+      {
+        "name": "Claude Code",
+        "status": "ok",
+        "detail": "not set up (`axocoatl recipe build claude-code && axocoatl connect claude-code` sets it up, and leaves your configuration as it is)",
+        "fix": null
+      },
+      {
+        "name": "Codex",
+        "status": "ok",
+        "detail": "not set up (`axocoatl connect codex` sets it up, and leaves your configuration as it is)",
+        "fix": null
+      },
+      {
+        "name": "claude CLI",
+        "status": "ok",
+        "detail": "not found; needed only to sign in with `axocoatl connect claude-code`",
+        "fix": null
+      },
+      {
+        "name": "codex CLI",
+        "status": "ok",
+        "detail": "not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container",
+        "fix": null
+      },
+      {
+        "name": "gh",
+        "status": "warn",
+        "detail": "not signed in; `axocoatl run --keep pr` needs it",
+        "fix": "gh auth login"
+      },
+      {
+        "name": "Stored credentials",
+        "status": "ok",
+        "detail": "receipt-signing-key",
+        "fix": null
+      }
+    ],
+    "daemon": [
+      {
+        "name": "Config",
+        "status": "ok",
+        "detail": "Config valid: /tmp/axo-gate.rnJ30x/home/.config/axocoatl/config.yaml",
+        "fix": null
+      },
+      {
+        "name": "Data dir",
+        "status": "ok",
+        "detail": "Data dir writable: /tmp/axo-gate.rnJ30x/home/.local/share/axocoatl",
+        "fix": null
+      },
+      {
+        "name": "Data dir ownership",
+        "status": "ok",
+        "detail": "Data dir ownership: recorded for this directory",
+        "fix": null
+      },
+      {
+        "name": "git",
+        "status": "ok",
+        "detail": "git 2.56.0 (the daemon runs git on your repositories)",
+        "fix": null
+      },
+      {
+        "name": "systemd user session",
+        "status": "ok",
+        "detail": "running (systemd --user); linger is on, so the Always-On Service keeps running after runner logs out",
+        "fix": null
+      },
+      {
+        "name": "Daemon",
+        "status": "ok",
+        "detail": "running (Axocoatl 1.5.1)",
+        "fix": null
+      },
+      {
+        "name": "Session volumes",
+        "status": "ok",
+        "detail": "Session volumes: the daemon removed 0 leaked runtime volumes of closed, deleted or unknown Sessions and 0 Node dependency volumes of deleted or unknown Sessions when it started; kept 0 runtime volumes of open Sessions and 0 dependency volumes of open or closed Sessions; left 0 of other daemons",
+        "fix": null
+      },
+      {
+        "name": "Webhooks",
+        "status": "ok",
+        "detail": "none (no outbound event egress)",
+        "fix": null
+      }
+    ]
+  },
+  "ready_for": [
+    {
+      "command": "axocoatl run fix",
+      "ok": false,
+      "detail": "the sandbox is not ready",
+      "set_up": true,
+      "required": true
+    },
+    {
+      "command": "axocoatl run fix-claude-code",
+      "ok": false,
+      "detail": "not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`",
+      "set_up": false,
+      "required": false
+    },
+    {
+      "command": "axocoatl run fix-codex",
+      "ok": false,
+      "detail": "not set up: run `axocoatl connect codex`",
+      "set_up": false,
+      "required": false
+    },
+    {
+      "command": "workbench Sessions",
+      "ok": false,
+      "detail": "the sandbox is not ready",
+      "set_up": true,
+      "required": true
+    }
+  ],
+  "steps_left": [
+    "User ID ranges: runner has no range of subordinate user and group IDs in /etc/subuid and /etc/subgid, so rootless Podman cannot unpack images or start Sessions: sudo usermod --add-subuids 165536-231071 --add-subgids 165536-231071 runner && podman system migrate"
+  ]
+}

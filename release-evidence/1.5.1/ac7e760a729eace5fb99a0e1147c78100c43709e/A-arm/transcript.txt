@@ -1,0 +1,1610 @@
+gate: PASS  start without axocoatl on PATH
+gate: PASS  scripted model server (gate stub reporting 0.40.6, cloud off)
+axocoatl-install: resolving latest release...
+axocoatl-install: downloading axocoatl-v1.5.1-aarch64-unknown-linux-gnu.tar.gz (v1.5.1)...
+axocoatl-install: checksum verified
+axocoatl-install: installed axocoatl v1.5.1 -> /usr/local/bin/axocoatl
+
+Next:  axocoatl onboard      # set up a writer and a reviewer, and Podman where it can (else it says how); it asks first
+       axocoatl doctor       # check the sandbox, the models and the daemon
+       axocoatl dev          # start the daemon; leave it running
+gate: PASS  install with the published command (0.6s)
+gate: PASS  installed binary is where the installer said
+gate: PASS  a new shell finds axocoatl
+gate: PASS  installed binary is the tarball's
+gate: PASS  axocoatl --version names 1.5.1
+gate: RUN   onboard --yes --writer ollama with no terminal
+Axocoatl setup
+Every command this runs is logged to /tmp/axo-gate.rnJ30x/home/.local/state/axocoatl/onboard-20261028-203252.log
+
+Step 0 · This computer
+This computer: Ubuntu 24.04.5 LTS, aarch64, 16 GB memory, 4 cores, 109 GB free.
+Found: Podman 4.9.3 (ready), Ollama 0.40.6 at http://127.0.0.1:45859 (cloud models off), gh, git 2.56.0.
+Not found: claude, codex.
+
+Step 1 · Who writes the code
+  Writer: A local model on this computer (Ollama, no account, needs 48 GB memory or more) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+  ✓ Landlock ABI 8
+  Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start from, and runs it rootless with your user mapped in and no network. yes (--yes)
+Trying to pull docker.io/library/alpine:3.20...
+Getting image source signatures
+Copying blob sha256:3f26bc2dec0b515f1c2818f6e13a8f1da1f88179a008445d4e587233386bff78
+Copying config sha256:ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+Writing manifest to image destination
+ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+  ✓ Sandbox ready: Podman 4.9.3, rootless, Landlock ABI 8
+
+Step 3 · A local writer and reviewer (Ollama)
+  ✓ Ollama 0.40.6 at http://127.0.0.1:45859, cloud models off (2 models installed)
+  ✓ qwen3-coder:30b is installed
+  ✓ gpt-oss:20b is installed
+  Loading qwen3-coder:30b once to read its context…
+  ✓ qwen3-coder:30b: 32768-token context, contract probes passed
+  Loading gpt-oss:20b once to read its context…
+  ✓ gpt-oss:20b: 32768-token context, contract probes passed
+
+Step 4 · The configuration
+  The new configuration sets:
+    `axocoatl run fix`: writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b
+    Workbench Sessions: Lead, Scout and the chat Assistant on ollama:qwen3-coder:30b, Reviewer on ollama:gpt-oss:20b
+    Ollama server: http://127.0.0.1:45859
+    Workbench port: 8200
+  ✓ Configuration written: /tmp/axo-gate.rnJ30x/home/.config/axocoatl/config.yaml
+  ✓ Data: /tmp/axo-gate.rnJ30x/home/.local/share/axocoatl
+
+Step 5 · Check
+  ! gh: not signed in; `axocoatl run --keep pr` needs it
+  ! Daemon: no daemon running; `axocoatl run` and the workbench need one
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead ollama:qwen3-coder:30b)
+Ready: yes
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)
+gate: PASS  onboard --yes --writer ollama with no terminal (7.2s)
+gate: PASS  onboard ran no sudo and no package manager through PATH
+gate: PASS  onboard ran no sudo by any path (system journal)
+gate: PASS  --no-pull pulled nothing
+gate: PASS  config.yaml holds the run models (run.models)
+gate: PASS  config.yaml uses the free port 8200
+gate: RUN   doctor --json says ready
+  (loading gpt-oss:20b once to read its context…)
+  (loading qwen3-coder:30b once to read its context…)
+gate: PASS  doctor --json says ready (1.7s)
+gate: PASS  doctor: ready, no FAIL in sandbox, models, writers, daemon
+gate: RUN   doctor exits 0
+  (loading gpt-oss:20b once to read its context…)
+  (loading qwen3-coder:30b once to read its context…)
+Axocoatl doctor (config: /tmp/axo-gate.rnJ30x/home/.config/axocoatl/config.yaml)
+
+Sandbox
+  [ OK ] Podman 4.9.3 ready (rootless; kernel 7.0.0-1017-azure), needed for every Session and every axocoatl run
+  [ OK ] Landlock ABI 8
+  [ OK ] Platform: Ubuntu 24.04.5 LTS, as the release gate verifies
+  [WARN] Platform: 16 GB of memory: local models have not been verified below 48 GB
+  [ OK ] Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)
+  [ OK ] Sandbox workload: image (commands run as the image's own user)
+
+Models
+  [ OK ] Ollama 0.40.6 at http://127.0.0.1:45859, a version native Sessions accept
+  [ OK ] Ollama cloud models disabled at http://127.0.0.1:45859 (~/.ollama/server.json)
+  [ OK ] gpt-oss:20b: GGUF; 1.1 GB, fits in memory; 32768-token context, contract probes passed; 1.1 GB loaded, all in GPU memory
+  [ OK ] qwen3-coder:30b: GGUF; 1.1 GB, fits in memory; 32768-token context, contract probes passed; 1.1 GB loaded, all in GPU memory
+
+Writers
+  [ OK ] Claude Code: not set up (`axocoatl recipe build claude-code && axocoatl connect claude-code` sets it up, and leaves your configuration as it is)
+  [ OK ] Codex: not set up (`axocoatl connect codex` sets it up, and leaves your configuration as it is)
+  [ OK ] claude CLI: not found; needed only to sign in with `axocoatl connect claude-code`
+  [ OK ] codex CLI: not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container
+  [WARN] gh: not signed in; `axocoatl run --keep pr` needs it
+         → gh auth login
+
+Daemon
+  [ OK ] Config valid: /tmp/axo-gate.rnJ30x/home/.config/axocoatl/config.yaml
+  [ OK ] Data dir writable: /tmp/axo-gate.rnJ30x/home/.local/share/axocoatl
+  [ OK ] Data dir ownership: recorded for this directory
+  [ OK ] git 2.56.0 (the daemon runs git on your repositories)
+  [ OK ] systemd user session: running (systemd --user); linger is on, so the Always-On Service keeps running after runner logs out
+  [WARN] Daemon: no daemon running; `axocoatl run` and the workbench need one
+         → Start it with `axocoatl dev` (or `axocoatl service start`)
+  [ OK ] Webhooks: none (no outbound event egress)
+
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead ollama:qwen3-coder:30b)
+Ready: yes
+gate: PASS  doctor exits 0 (1.6s)
+gate: PASS  doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]
+gate: PASS  axocoatl dev serves on its configured port
+gate: RUN   run fix on node-plain
+· building the run's image localhost/axocoatl-recipe-node:3b267c748259 (node, from docker.io/library/node:24.21.0-bookworm-slim): about 100 MB to download, about 365 MB on disk, once on this computer; later runs reuse it
+STEP 1/9: FROM docker.io/library/node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+Trying to pull docker.io/library/node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20...
+Getting image source signatures
+Copying blob sha256:4fafc9a89135b87d66ccaf8587cd7e44d65e717d06fb239c6fd4839e64678987
+Copying blob sha256:c75f989a229d12b2d2613a5997de9ff3546f664c22da9248720033a2410220f6
+Copying blob sha256:9e7afa9c9ea06b755c905f765b2d70c431dd5c00e88bc0810ab04b5ab49b69c5
+Copying blob sha256:c1a924fd4d24bc36aeda3ab83dc77c1e84a9c624e42b08ed33e9985744558059
+Copying blob sha256:49ac4e8e4295c8ee475ab0dff5e76277d9328670ecc925439122c1ba3f90b228
+Copying config sha256:683727a317323c89635f1c9584c722c91dbfa0741cbfb9e2468162867aaf31f7
+Writing manifest to image destination
+STEP 2/9: ENV NPM_CONFIG_UPDATE_NOTIFIER=false     NPM_CONFIG_FUND=false     NPM_CONFIG_AUDIT=false
+--> 0662170bdad2
+STEP 3/9: RUN export DEBIAN_FRONTEND=noninteractive  && apt-get update -qq  && apt-get install -y --no-install-recommends ca-certificates git  && rm -rf /var/lib/apt/lists/*  && node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (!(major > 24 || (major === 24 && minor >= 8))) { console.error("recipe base needs Node >= 24.8, found " + process.version); process.exit(1); }'  && for command in sh git env grep tee rm mkdir mv cp cat head wc find realpath ls rmdir test sha256sum base64; do       command -v "$command" >/dev/null || { echo "recipe base lacks $command" >&2; exit 1; };     done
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  git-man libbrotli1 libcurl3-gnutls liberror-perl libexpat1 libgdbm-compat4
+  libgdbm6 libgssapi-krb5-2 libk5crypto3 libkeyutils1 libkrb5-3
+  libkrb5support0 libldap-2.5-0 libnghttp2-14 libperl5.36 libpsl5 librtmp1
+  libsasl2-2 libsasl2-modules-db libssh2-1 libssl3 openssl perl perl-base
+  perl-modules-5.36
+Suggested packages:
+  gettext-base git-daemon-run | git-daemon-sysvinit git-doc git-email git-gui
+  gitk gitweb git-cvs git-mediawiki git-svn gdbm-l10n krb5-doc krb5-user
+  sensible-utils perl-doc libterm-readline-gnu-perl
+  | libterm-readline-perl-perl make libtap-harness-archive-perl
+Recommended packages:
+  patch less ssh-client krb5-locales libldap-common publicsuffix
+  libsasl2-modules netbase
+The following NEW packages will be installed:
+  ca-certificates git git-man libbrotli1 libcurl3-gnutls liberror-perl
+  libexpat1 libgdbm-compat4 libgdbm6 libgssapi-krb5-2 libk5crypto3
+  libkeyutils1 libkrb5-3 libkrb5support0 libldap-2.5-0 libnghttp2-14
+  libperl5.36 libpsl5 librtmp1 libsasl2-2 libsasl2-modules-db libssh2-1
+  libssl3 openssl perl perl-modules-5.36
+The following packages will be upgraded:
+  perl-base
+1 upgraded, 26 newly installed, 0 to remove and 1 not upgraded.
+Need to get 23.2 MB of archives.
+After this operation, 115 MB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian-security bookworm-security/main arm64 perl-base arm64 5.36.0-7+deb12u4 [1478 kB]
+Get:2 http://deb.debian.org/debian-security bookworm-security/main arm64 perl-modules-5.36 all 5.36.0-7+deb12u4 [2817 kB]
+Get:3 http://deb.debian.org/debian bookworm/main arm64 libgdbm6 arm64 1.23-3 [70.9 kB]
+Get:4 http://deb.debian.org/debian bookworm/main arm64 libgdbm-compat4 arm64 1.23-3 [48.0 kB]
+Get:5 http://deb.debian.org/debian-security bookworm-security/main arm64 libperl5.36 arm64 5.36.0-7+deb12u4 [4002 kB]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main arm64 perl arm64 5.36.0-7+deb12u4 [239 kB]
+Get:7 http://deb.debian.org/debian-security bookworm-security/main arm64 libssl3 arm64 3.0.22-1~deb12u2 [1829 kB]
+Get:8 http://deb.debian.org/debian-security bookworm-security/main arm64 openssl arm64 3.0.22-1~deb12u2 [1410 kB]
+Get:9 http://deb.debian.org/debian-security bookworm-security/main arm64 ca-certificates all 20250419~deb12u2 [161 kB]
+Get:10 http://deb.debian.org/debian-security bookworm-security/main arm64 libbrotli1 arm64 1.0.9-2+deb12u1 [267 kB]
+Get:11 http://deb.debian.org/debian bookworm/main arm64 libkrb5support0 arm64 1.20.1-2+deb12u5 [32.6 kB]
+Get:12 http://deb.debian.org/debian bookworm/main arm64 libk5crypto3 arm64 1.20.1-2+deb12u5 [79.9 kB]
+Get:13 http://deb.debian.org/debian bookworm/main arm64 libkeyutils1 arm64 1.6.3-2 [8844 B]
+Get:14 http://deb.debian.org/debian bookworm/main arm64 libkrb5-3 arm64 1.20.1-2+deb12u5 [316 kB]
+Get:15 http://deb.debian.org/debian bookworm/main arm64 libgssapi-krb5-2 arm64 1.20.1-2+deb12u5 [124 kB]
+Get:16 http://deb.debian.org/debian bookworm/main arm64 libsasl2-modules-db arm64 2.1.28+dfsg-10 [20.8 kB]
+Get:17 http://deb.debian.org/debian bookworm/main arm64 libsasl2-2 arm64 2.1.28+dfsg-10 [58.0 kB]
+Get:18 http://deb.debian.org/debian bookworm/main arm64 libldap-2.5-0 arm64 2.5.13+dfsg-5 [171 kB]
+Get:19 http://deb.debian.org/debian bookworm/main arm64 libnghttp2-14 arm64 1.52.0-1+deb12u3 [69.0 kB]
+Get:20 http://deb.debian.org/debian bookworm/main arm64 libpsl5 arm64 0.21.2-1 [58.6 kB]
+Get:21 http://deb.debian.org/debian bookworm/main arm64 librtmp1 arm64 2.4+20151223.gitfa8646d.1-2+b2 [59.4 kB]
+Get:22 http://deb.debian.org/debian-security bookworm-security/main arm64 libssh2-1 arm64 1.10.0-3+deb12u1 [169 kB]
+Get:23 http://deb.debian.org/debian bookworm/main arm64 libcurl3-gnutls arm64 7.88.1-10+deb12u15 [362 kB]
+Get:24 http://deb.debian.org/debian-security bookworm-security/main arm64 libexpat1 arm64 2.5.0-1+deb12u5 [91.7 kB]
+Get:25 http://deb.debian.org/debian bookworm/main arm64 liberror-perl all 0.17029-2 [29.0 kB]
+Get:26 http://deb.debian.org/debian bookworm/main arm64 git-man all 1:2.39.5-0+deb12u3 [2053 kB]
+Get:27 http://deb.debian.org/debian bookworm/main arm64 git arm64 1:2.39.5-0+deb12u3 [7153 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 23.2 MB in 0s (162 MB/s)
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 6090 files and directories currently installed.)
+Preparing to unpack .../perl-base_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking perl-base (5.36.0-7+deb12u4) over (5.36.0-7+deb12u3) ...
+Setting up perl-base (5.36.0-7+deb12u4) ...
+Selecting previously unselected package perl-modules-5.36.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 6090 files and directories currently installed.)
+Preparing to unpack .../00-perl-modules-5.36_5.36.0-7+deb12u4_all.deb ...
+Unpacking perl-modules-5.36 (5.36.0-7+deb12u4) ...
+Selecting previously unselected package libgdbm6:arm64.
+Preparing to unpack .../01-libgdbm6_1.23-3_arm64.deb ...
+Unpacking libgdbm6:arm64 (1.23-3) ...
+Selecting previously unselected package libgdbm-compat4:arm64.
+Preparing to unpack .../02-libgdbm-compat4_1.23-3_arm64.deb ...
+Unpacking libgdbm-compat4:arm64 (1.23-3) ...
+Selecting previously unselected package libperl5.36:arm64.
+Preparing to unpack .../03-libperl5.36_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking libperl5.36:arm64 (5.36.0-7+deb12u4) ...
+Selecting previously unselected package perl.
+Preparing to unpack .../04-perl_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking perl (5.36.0-7+deb12u4) ...
+Selecting previously unselected package libssl3:arm64.
+Preparing to unpack .../05-libssl3_3.0.22-1~deb12u2_arm64.deb ...
+Unpacking libssl3:arm64 (3.0.22-1~deb12u2) ...
+Selecting previously unselected package openssl.
+Preparing to unpack .../06-openssl_3.0.22-1~deb12u2_arm64.deb ...
+Unpacking openssl (3.0.22-1~deb12u2) ...
+Selecting previously unselected package ca-certificates.
+Preparing to unpack .../07-ca-certificates_20250419~deb12u2_all.deb ...
+Unpacking ca-certificates (20250419~deb12u2) ...
+Selecting previously unselected package libbrotli1:arm64.
+Preparing to unpack .../08-libbrotli1_1.0.9-2+deb12u1_arm64.deb ...
+Unpacking libbrotli1:arm64 (1.0.9-2+deb12u1) ...
+Selecting previously unselected package libkrb5support0:arm64.
+Preparing to unpack .../09-libkrb5support0_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libkrb5support0:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libk5crypto3:arm64.
+Preparing to unpack .../10-libk5crypto3_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libk5crypto3:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libkeyutils1:arm64.
+Preparing to unpack .../11-libkeyutils1_1.6.3-2_arm64.deb ...
+Unpacking libkeyutils1:arm64 (1.6.3-2) ...
+Selecting previously unselected package libkrb5-3:arm64.
+Preparing to unpack .../12-libkrb5-3_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libkrb5-3:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libgssapi-krb5-2:arm64.
+Preparing to unpack .../13-libgssapi-krb5-2_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libgssapi-krb5-2:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libsasl2-modules-db:arm64.
+Preparing to unpack .../14-libsasl2-modules-db_2.1.28+dfsg-10_arm64.deb ...
+Unpacking libsasl2-modules-db:arm64 (2.1.28+dfsg-10) ...
+Selecting previously unselected package libsasl2-2:arm64.
+Preparing to unpack .../15-libsasl2-2_2.1.28+dfsg-10_arm64.deb ...
+Unpacking libsasl2-2:arm64 (2.1.28+dfsg-10) ...
+Selecting previously unselected package libldap-2.5-0:arm64.
+Preparing to unpack .../16-libldap-2.5-0_2.5.13+dfsg-5_arm64.deb ...
+Unpacking libldap-2.5-0:arm64 (2.5.13+dfsg-5) ...
+Selecting previously unselected package libnghttp2-14:arm64.
+Preparing to unpack .../17-libnghttp2-14_1.52.0-1+deb12u3_arm64.deb ...
+Unpacking libnghttp2-14:arm64 (1.52.0-1+deb12u3) ...
+Selecting previously unselected package libpsl5:arm64.
+Preparing to unpack .../18-libpsl5_0.21.2-1_arm64.deb ...
+Unpacking libpsl5:arm64 (0.21.2-1) ...
+Selecting previously unselected package librtmp1:arm64.
+Preparing to unpack .../19-librtmp1_2.4+20151223.gitfa8646d.1-2+b2_arm64.deb ...
+Unpacking librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Selecting previously unselected package libssh2-1:arm64.
+Preparing to unpack .../20-libssh2-1_1.10.0-3+deb12u1_arm64.deb ...
+Unpacking libssh2-1:arm64 (1.10.0-3+deb12u1) ...
+Selecting previously unselected package libcurl3-gnutls:arm64.
+Preparing to unpack .../21-libcurl3-gnutls_7.88.1-10+deb12u15_arm64.deb ...
+Unpacking libcurl3-gnutls:arm64 (7.88.1-10+deb12u15) ...
+Selecting previously unselected package libexpat1:arm64.
+Preparing to unpack .../22-libexpat1_2.5.0-1+deb12u5_arm64.deb ...
+Unpacking libexpat1:arm64 (2.5.0-1+deb12u5) ...
+Selecting previously unselected package liberror-perl.
+Preparing to unpack .../23-liberror-perl_0.17029-2_all.deb ...
+Unpacking liberror-perl (0.17029-2) ...
+Selecting previously unselected package git-man.
+Preparing to unpack .../24-git-man_1%3a2.39.5-0+deb12u3_all.deb ...
+Unpacking git-man (1:2.39.5-0+deb12u3) ...
+Selecting previously unselected package git.
+Preparing to unpack .../25-git_1%3a2.39.5-0+deb12u3_arm64.deb ...
+Unpacking git (1:2.39.5-0+deb12u3) ...
+Setting up libexpat1:arm64 (2.5.0-1+deb12u5) ...
+Setting up libkeyutils1:arm64 (1.6.3-2) ...
+Setting up libpsl5:arm64 (0.21.2-1) ...
+Setting up libbrotli1:arm64 (1.0.9-2+deb12u1) ...
+Setting up libssl3:arm64 (3.0.22-1~deb12u2) ...
+Setting up libnghttp2-14:arm64 (1.52.0-1+deb12u3) ...
+Setting up libkrb5support0:arm64 (1.20.1-2+deb12u5) ...
+Setting up libsasl2-modules-db:arm64 (2.1.28+dfsg-10) ...
+Setting up perl-modules-5.36 (5.36.0-7+deb12u4) ...
+Setting up librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Setting up libk5crypto3:arm64 (1.20.1-2+deb12u5) ...
+Setting up libsasl2-2:arm64 (2.1.28+dfsg-10) ...
+Setting up git-man (1:2.39.5-0+deb12u3) ...
+Setting up libssh2-1:arm64 (1.10.0-3+deb12u1) ...
+Setting up libkrb5-3:arm64 (1.20.1-2+deb12u5) ...
+Setting up openssl (3.0.22-1~deb12u2) ...
+Setting up libgdbm6:arm64 (1.23-3) ...
+Setting up libldap-2.5-0:arm64 (2.5.13+dfsg-5) ...
+Setting up ca-certificates (20250419~deb12u2) ...
+Updating certificates in /etc/ssl/certs...
+148 added, 0 removed; done.
+Setting up libgssapi-krb5-2:arm64 (1.20.1-2+deb12u5) ...
+Setting up libgdbm-compat4:arm64 (1.23-3) ...
+Setting up libperl5.36:arm64 (5.36.0-7+deb12u4) ...
+Setting up libcurl3-gnutls:arm64 (7.88.1-10+deb12u15) ...
+Setting up perl (5.36.0-7+deb12u4) ...
+Setting up liberror-perl (0.17029-2) ...
+Setting up git (1:2.39.5-0+deb12u3) ...
+Processing triggers for libc-bin (2.36-9+deb12u14) ...
+Processing triggers for ca-certificates (20250419~deb12u2) ...
+Updating certificates in /etc/ssl/certs...
+0 added, 0 removed; done.
+Running hooks in /etc/ca-certificates/update.d...
+done.
+--> 0c2cda3fa45d
+STEP 4/9: RUN printf '%s\n'       '#!/usr/bin/env node'       'const crypto = require("crypto"), fs = require("fs");'       'const [file, wanted] = process.argv.slice(2);'       'const [algorithm, expected] = wanted.split(/-(.*)/s);'       'const actual = crypto.createHash(algorithm).update(fs.readFileSync(file)).digest("base64");'       'if (actual !== expected) { console.error("integrity mismatch for " + file + ": " + algorithm + "-" + actual); process.exit(1); }'       > /usr/local/bin/axocoatl-verify-integrity  && chmod 0755 /usr/local/bin/axocoatl-verify-integrity
+--> e265d3254619
+STEP 5/9: LABEL io.axocoatl.role=recipe       io.axocoatl.recipe.base=node-24.21.0-bookworm
+--> d08d4e279b7c
+STEP 6/9: ENV AXOCOATL_TOOLCHAIN=node     AXOCOATL_CACHE=/opt/axocoatl-cache     npm_config_cache=/opt/axocoatl-cache/node/npm     npm_config_logs_max=0     COREPACK_HOME=/opt/axocoatl-cache/node/corepack     COREPACK_ENABLE_DOWNLOAD_PROMPT=0     YARN_CACHE_FOLDER=/opt/axocoatl-cache/node/yarn     YARN_GLOBAL_FOLDER=/opt/axocoatl-cache/node/yarn-berry     YARN_ENABLE_TELEMETRY=0
+--> 19a17501103e
+STEP 7/9: RUN export DEBIAN_FRONTEND=noninteractive  && apt-get update -qq  && apt-get install -y --no-install-recommends make  && rm -rf /var/lib/apt/lists/*  && corepack enable  && mkdir -p /opt/axocoatl-cache  && node --version  && npm --version
+Reading package lists...
+Building dependency tree...
+Reading state information...
+Suggested packages:
+  make-doc
+The following NEW packages will be installed:
+  make
+0 upgraded, 1 newly installed, 0 to remove and 1 not upgraded.
+Need to get 391 kB of archives.
+After this operation, 1634 kB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian bookworm/main arm64 make arm64 4.3-4.1 [391 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 391 kB in 0s (9227 kB/s)
+Selecting previously unselected package make.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 9823 files and directories currently installed.)
+Preparing to unpack .../make_4.3-4.1_arm64.deb ...
+Unpacking make (4.3-4.1) ...
+Setting up make (4.3-4.1) ...
+v24.21.0
+11.19.0
+--> 1dcee321f58b
+STEP 8/9: LABEL io.axocoatl.toolchain=node       io.axocoatl.toolchain.version=node-24.21.0
+--> 695cf4f40fc9
+STEP 9/9: LABEL "io.axocoatl.role"="recipe" "io.axocoatl.recipes"="node" "io.axocoatl.recipe-digest"="3b267c74825928d4d29da91526be0ebccf7ec90b2c909adaee20826614d2528c"
+COMMIT localhost/axocoatl-recipe-node:3b267c748259
+--> 26b9c22e3616
+Successfully tagged localhost/axocoatl-recipe-node:3b267c748259
+26b9c22e3616210580f54cc65c6e3ada678ae75229565260b14c5db20a851eac
+· built localhost/axocoatl-recipe-node:3b267c748259 in 13 s (image id 26b9c22e3616)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/node-plain
+· run run-651a879a-a84a-4ad8-be54-6c9eefdab2de in Session ses-35a232b8-7136-4917-8040-06aa3e6891a1
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-dab291b0-828e-4f53-bdd2-50035e1eab92 started (run)
+· turn turn-dab291b0-828e-4f53-bdd2-50035e1eab92 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+Usage: 6587 input + 306 output tokens, $0.0000
+Network: 5 recorded events, 0 allowed and 0 refused connections, 0 route requests
+Record: run-651a879a-a84a-4ad8-be54-6c9eefdab2de
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on node-plain (26.9s)
+gate: PASS  run on node-plain chose a node image
+gate: RUN   receipt verify on node-plain (documented command)
+receipt of run run-651a879a-a84a-4ad8-be54-6c9eefdab2de, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate.rnJ30x/repos/node-plain/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on node-plain (documented command) (0.0s)
+gate: RUN   record verify on node-plain
+valid: run run-651a879a-a84a-4ad8-be54-6c9eefdab2de in Session ses-35a232b8-7136-4917-8040-06aa3e6891a1, written by Axocoatl 1.5.1, 25 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 5
+  run_event: 12
+  receipt: 1
+gate: PASS  record verify on node-plain (0.0s)
+gate: RUN   receipt matches the record on node-plain
+receipt of run run-651a879a-a84a-4ad8-be54-6c9eefdab2de, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate.rnJ30x/repos/node-plain/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on node-plain (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on node-plain
+gate: PASS  the model fixed node-plain once
+gate: RUN   run fix on node-deps
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/node-deps
+· run run-d698e7ea-0794-4ae0-b722-1f0695a36815 in Session ses-fd2bd3f7-7ef8-49db-aaa8-731cccc34c24
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+· note: setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.6 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-24e4b5e8-c6cc-40a5-837e-78aeee7e58bd started (run)
+· turn turn-24e4b5e8-c6cc-40a5-837e-78aeee7e58bd ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+  setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.6 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 3480 input + 186 output tokens, $0.0000
+Network: 21 recorded events, 6 allowed and 0 refused connections, 0 route requests
+Record: run-d698e7ea-0794-4ae0-b722-1f0695a36815
+· JUnit written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-deps/junit.xml
+· record written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-deps/run.axorecord.jsonl
+· receipt written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-deps/receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on node-deps (9.9s)
+gate: PASS  run on node-deps chose a node image
+gate: PASS  run on node-deps ran setup (npm ci)
+gate: RUN   receipt verify on node-deps (documented command)
+receipt of run run-d698e7ea-0794-4ae0-b722-1f0695a36815, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-deps/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on node-deps (documented command) (0.0s)
+gate: RUN   record verify on node-deps
+valid: run run-d698e7ea-0794-4ae0-b722-1f0695a36815 in Session ses-fd2bd3f7-7ef8-49db-aaa8-731cccc34c24, written by Axocoatl 1.5.1, 42 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 21
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on node-deps (0.0s)
+gate: RUN   receipt matches the record on node-deps
+receipt of run run-d698e7ea-0794-4ae0-b722-1f0695a36815, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-deps/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on node-deps (0.1s)
+gate: PASS  no tool-call markup in the accepted output of the run on node-deps
+gate: PASS  the model fixed node-deps once
+gate: RUN   run fix on python-pytest
+· building the run's image localhost/axocoatl-recipe-python:10128f1d8789 (python, from docker.io/library/python:3.13.16-slim-bookworm): about 65 MB to download, about 250 MB on disk, once on this computer; later runs reuse it
+STEP 1/8: FROM docker.io/library/python:3.13.16-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641
+Trying to pull docker.io/library/python@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641...
+Getting image source signatures
+Copying blob sha256:32020fed7f2a057b9cee7fdbfa3ea9fc394149118d7a951c462c7055c3cd3f56
+Copying blob sha256:c75f989a229d12b2d2613a5997de9ff3546f664c22da9248720033a2410220f6
+Copying blob sha256:aa08835651e777794bde3e8c99bee012c418f60d0d164df22497fa01dc72aca5
+Copying blob sha256:7b2df2902dddd1a4510670c4d3a6d61b4458fa3e7c1ae0b262d75bde1349ab14
+Copying config sha256:da841a7026abc0089180121604f6d0ba4324998e2d133eccae13f22707055dc1
+Writing manifest to image destination
+STEP 2/8: RUN export DEBIAN_FRONTEND=noninteractive  && apt-get update -qq  && apt-get install -y --no-install-recommends ca-certificates git make  && rm -rf /var/lib/apt/lists/*  && for command in sh git env grep tee rm mkdir mv cp cat head tail od wc find realpath ls rmdir test sha256sum base64; do       command -v "$command" >/dev/null || { echo "toolchain base lacks $command" >&2; exit 1; };     done
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  git-man libbrotli1 libcurl3-gnutls liberror-perl libexpat1 libgdbm-compat4
+  libgssapi-krb5-2 libk5crypto3 libkeyutils1 libkrb5-3 libkrb5support0
+  libldap-2.5-0 libnghttp2-14 libperl5.36 libpsl5 librtmp1 libsasl2-2
+  libsasl2-modules-db libssh2-1 perl perl-modules-5.36
+Suggested packages:
+  gettext-base git-daemon-run | git-daemon-sysvinit git-doc git-email git-gui
+  gitk gitweb git-cvs git-mediawiki git-svn krb5-doc krb5-user sensible-utils
+  make-doc perl-doc libterm-readline-gnu-perl | libterm-readline-perl-perl
+  libtap-harness-archive-perl
+Recommended packages:
+  patch less ssh-client krb5-locales libldap-common publicsuffix
+  libsasl2-modules
+The following NEW packages will be installed:
+  git git-man libbrotli1 libcurl3-gnutls liberror-perl libexpat1
+  libgdbm-compat4 libgssapi-krb5-2 libk5crypto3 libkeyutils1 libkrb5-3
+  libkrb5support0 libldap-2.5-0 libnghttp2-14 libperl5.36 libpsl5 librtmp1
+  libsasl2-2 libsasl2-modules-db libssh2-1 make perl perl-modules-5.36
+The following packages will be upgraded:
+  ca-certificates
+1 upgraded, 23 newly installed, 0 to remove and 3 not upgraded.
+Need to get 18.8 MB of archives.
+After this operation, 107 MB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian-security bookworm-security/main arm64 perl-modules-5.36 all 5.36.0-7+deb12u4 [2817 kB]
+Get:2 http://deb.debian.org/debian bookworm/main arm64 libgdbm-compat4 arm64 1.23-3 [48.0 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security/main arm64 libperl5.36 arm64 5.36.0-7+deb12u4 [4002 kB]
+Get:4 http://deb.debian.org/debian-security bookworm-security/main arm64 perl arm64 5.36.0-7+deb12u4 [239 kB]
+Get:5 http://deb.debian.org/debian-security bookworm-security/main arm64 ca-certificates all 20250419~deb12u2 [161 kB]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main arm64 libbrotli1 arm64 1.0.9-2+deb12u1 [267 kB]
+Get:7 http://deb.debian.org/debian bookworm/main arm64 libkrb5support0 arm64 1.20.1-2+deb12u5 [32.6 kB]
+Get:8 http://deb.debian.org/debian bookworm/main arm64 libk5crypto3 arm64 1.20.1-2+deb12u5 [79.9 kB]
+Get:9 http://deb.debian.org/debian bookworm/main arm64 libkeyutils1 arm64 1.6.3-2 [8844 B]
+Get:10 http://deb.debian.org/debian bookworm/main arm64 libkrb5-3 arm64 1.20.1-2+deb12u5 [316 kB]
+Get:11 http://deb.debian.org/debian bookworm/main arm64 libgssapi-krb5-2 arm64 1.20.1-2+deb12u5 [124 kB]
+Get:12 http://deb.debian.org/debian bookworm/main arm64 libsasl2-modules-db arm64 2.1.28+dfsg-10 [20.8 kB]
+Get:13 http://deb.debian.org/debian bookworm/main arm64 libsasl2-2 arm64 2.1.28+dfsg-10 [58.0 kB]
+Get:14 http://deb.debian.org/debian bookworm/main arm64 libldap-2.5-0 arm64 2.5.13+dfsg-5 [171 kB]
+Get:15 http://deb.debian.org/debian bookworm/main arm64 libnghttp2-14 arm64 1.52.0-1+deb12u3 [69.0 kB]
+Get:16 http://deb.debian.org/debian bookworm/main arm64 libpsl5 arm64 0.21.2-1 [58.6 kB]
+Get:17 http://deb.debian.org/debian bookworm/main arm64 librtmp1 arm64 2.4+20151223.gitfa8646d.1-2+b2 [59.4 kB]
+Get:18 http://deb.debian.org/debian-security bookworm-security/main arm64 libssh2-1 arm64 1.10.0-3+deb12u1 [169 kB]
+Get:19 http://deb.debian.org/debian bookworm/main arm64 libcurl3-gnutls arm64 7.88.1-10+deb12u15 [362 kB]
+Get:20 http://deb.debian.org/debian-security bookworm-security/main arm64 libexpat1 arm64 2.5.0-1+deb12u5 [91.7 kB]
+Get:21 http://deb.debian.org/debian bookworm/main arm64 liberror-perl all 0.17029-2 [29.0 kB]
+Get:22 http://deb.debian.org/debian bookworm/main arm64 git-man all 1:2.39.5-0+deb12u3 [2053 kB]
+Get:23 http://deb.debian.org/debian bookworm/main arm64 git arm64 1:2.39.5-0+deb12u3 [7153 kB]
+Get:24 http://deb.debian.org/debian bookworm/main arm64 make arm64 4.3-4.1 [391 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 18.8 MB in 0s (162 MB/s)
+Selecting previously unselected package perl-modules-5.36.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 6642 files and directories currently installed.)
+Preparing to unpack .../00-perl-modules-5.36_5.36.0-7+deb12u4_all.deb ...
+Unpacking perl-modules-5.36 (5.36.0-7+deb12u4) ...
+Selecting previously unselected package libgdbm-compat4:arm64.
+Preparing to unpack .../01-libgdbm-compat4_1.23-3_arm64.deb ...
+Unpacking libgdbm-compat4:arm64 (1.23-3) ...
+Selecting previously unselected package libperl5.36:arm64.
+Preparing to unpack .../02-libperl5.36_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking libperl5.36:arm64 (5.36.0-7+deb12u4) ...
+Selecting previously unselected package perl.
+Preparing to unpack .../03-perl_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking perl (5.36.0-7+deb12u4) ...
+Preparing to unpack .../04-ca-certificates_20250419~deb12u2_all.deb ...
+Unpacking ca-certificates (20250419~deb12u2) over (20250419~deb12u1) ...
+Selecting previously unselected package libbrotli1:arm64.
+Preparing to unpack .../05-libbrotli1_1.0.9-2+deb12u1_arm64.deb ...
+Unpacking libbrotli1:arm64 (1.0.9-2+deb12u1) ...
+Selecting previously unselected package libkrb5support0:arm64.
+Preparing to unpack .../06-libkrb5support0_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libkrb5support0:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libk5crypto3:arm64.
+Preparing to unpack .../07-libk5crypto3_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libk5crypto3:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libkeyutils1:arm64.
+Preparing to unpack .../08-libkeyutils1_1.6.3-2_arm64.deb ...
+Unpacking libkeyutils1:arm64 (1.6.3-2) ...
+Selecting previously unselected package libkrb5-3:arm64.
+Preparing to unpack .../09-libkrb5-3_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libkrb5-3:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libgssapi-krb5-2:arm64.
+Preparing to unpack .../10-libgssapi-krb5-2_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libgssapi-krb5-2:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libsasl2-modules-db:arm64.
+Preparing to unpack .../11-libsasl2-modules-db_2.1.28+dfsg-10_arm64.deb ...
+Unpacking libsasl2-modules-db:arm64 (2.1.28+dfsg-10) ...
+Selecting previously unselected package libsasl2-2:arm64.
+Preparing to unpack .../12-libsasl2-2_2.1.28+dfsg-10_arm64.deb ...
+Unpacking libsasl2-2:arm64 (2.1.28+dfsg-10) ...
+Selecting previously unselected package libldap-2.5-0:arm64.
+Preparing to unpack .../13-libldap-2.5-0_2.5.13+dfsg-5_arm64.deb ...
+Unpacking libldap-2.5-0:arm64 (2.5.13+dfsg-5) ...
+Selecting previously unselected package libnghttp2-14:arm64.
+Preparing to unpack .../14-libnghttp2-14_1.52.0-1+deb12u3_arm64.deb ...
+Unpacking libnghttp2-14:arm64 (1.52.0-1+deb12u3) ...
+Selecting previously unselected package libpsl5:arm64.
+Preparing to unpack .../15-libpsl5_0.21.2-1_arm64.deb ...
+Unpacking libpsl5:arm64 (0.21.2-1) ...
+Selecting previously unselected package librtmp1:arm64.
+Preparing to unpack .../16-librtmp1_2.4+20151223.gitfa8646d.1-2+b2_arm64.deb ...
+Unpacking librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Selecting previously unselected package libssh2-1:arm64.
+Preparing to unpack .../17-libssh2-1_1.10.0-3+deb12u1_arm64.deb ...
+Unpacking libssh2-1:arm64 (1.10.0-3+deb12u1) ...
+Selecting previously unselected package libcurl3-gnutls:arm64.
+Preparing to unpack .../18-libcurl3-gnutls_7.88.1-10+deb12u15_arm64.deb ...
+Unpacking libcurl3-gnutls:arm64 (7.88.1-10+deb12u15) ...
+Selecting previously unselected package libexpat1:arm64.
+Preparing to unpack .../19-libexpat1_2.5.0-1+deb12u5_arm64.deb ...
+Unpacking libexpat1:arm64 (2.5.0-1+deb12u5) ...
+Selecting previously unselected package liberror-perl.
+Preparing to unpack .../20-liberror-perl_0.17029-2_all.deb ...
+Unpacking liberror-perl (0.17029-2) ...
+Selecting previously unselected package git-man.
+Preparing to unpack .../21-git-man_1%3a2.39.5-0+deb12u3_all.deb ...
+Unpacking git-man (1:2.39.5-0+deb12u3) ...
+Selecting previously unselected package git.
+Preparing to unpack .../22-git_1%3a2.39.5-0+deb12u3_arm64.deb ...
+Unpacking git (1:2.39.5-0+deb12u3) ...
+Selecting previously unselected package make.
+Preparing to unpack .../23-make_4.3-4.1_arm64.deb ...
+Unpacking make (4.3-4.1) ...
+Setting up libexpat1:arm64 (2.5.0-1+deb12u5) ...
+Setting up libkeyutils1:arm64 (1.6.3-2) ...
+Setting up libpsl5:arm64 (0.21.2-1) ...
+Setting up libbrotli1:arm64 (1.0.9-2+deb12u1) ...
+Setting up libnghttp2-14:arm64 (1.52.0-1+deb12u3) ...
+Setting up libkrb5support0:arm64 (1.20.1-2+deb12u5) ...
+Setting up libsasl2-modules-db:arm64 (2.1.28+dfsg-10) ...
+Setting up ca-certificates (20250419~deb12u2) ...
+Updating certificates in /etc/ssl/certs...
+rehash: warning: skipping ca-certificates.crt,it does not contain exactly one certificate or CRL
+0 added, 2 removed; done.
+Setting up perl-modules-5.36 (5.36.0-7+deb12u4) ...
+Setting up make (4.3-4.1) ...
+Setting up librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Setting up libgdbm-compat4:arm64 (1.23-3) ...
+Setting up libk5crypto3:arm64 (1.20.1-2+deb12u5) ...
+Setting up libsasl2-2:arm64 (2.1.28+dfsg-10) ...
+Setting up git-man (1:2.39.5-0+deb12u3) ...
+Setting up libssh2-1:arm64 (1.10.0-3+deb12u1) ...
+Setting up libkrb5-3:arm64 (1.20.1-2+deb12u5) ...
+Setting up libperl5.36:arm64 (5.36.0-7+deb12u4) ...
+Setting up libldap-2.5-0:arm64 (2.5.13+dfsg-5) ...
+Setting up perl (5.36.0-7+deb12u4) ...
+Setting up libgssapi-krb5-2:arm64 (1.20.1-2+deb12u5) ...
+Setting up libcurl3-gnutls:arm64 (7.88.1-10+deb12u15) ...
+Setting up liberror-perl (0.17029-2) ...
+Setting up git (1:2.39.5-0+deb12u3) ...
+Processing triggers for libc-bin (2.36-9+deb12u14) ...
+Processing triggers for ca-certificates (20250419~deb12u2) ...
+Updating certificates in /etc/ssl/certs...
+0 added, 0 removed; done.
+Running hooks in /etc/ca-certificates/update.d...
+done.
+--> e0a2c7680fa0
+STEP 3/8: LABEL io.axocoatl.role=recipe       io.axocoatl.recipe.base=python-3.13.16-bookworm
+--> 6ec9fd13310e
+STEP 4/8: ENV AXOCOATL_TOOLCHAIN=python     AXOCOATL_CACHE=/opt/axocoatl-cache     VIRTUAL_ENV=/opt/axocoatl-cache/python/venv     PIP_CACHE_DIR=/opt/axocoatl-cache/python/pip     PIP_DISABLE_PIP_VERSION_CHECK=1     PIP_NO_INPUT=1     PIP_ROOT_USER_ACTION=ignore     PYTHONDONTWRITEBYTECODE=1     PYTEST_ADDOPTS="-p no:cacheprovider"     DIST_EXTRA_CONFIG=/etc/axocoatl/setuptools.cfg
+--> 28f63b9db7b0
+STEP 5/8: ENV PATH=/opt/axocoatl-cache/python/venv/bin:$PATH
+--> 975bb0f123f2
+STEP 6/8: RUN mkdir -p /opt/axocoatl-cache /etc/axocoatl  && printf '[egg_info]\negg_base = /tmp\n' > /etc/axocoatl/setuptools.cfg  && python3 --version  && python3 -m venv --help >/dev/null  && python3 -m pip --version >/dev/null
+Python 3.13.16
+--> cc159fca9bd3
+STEP 7/8: LABEL io.axocoatl.toolchain=python       io.axocoatl.toolchain.version=python-3.13.16
+--> d8f6cede976c
+STEP 8/8: LABEL "io.axocoatl.role"="recipe" "io.axocoatl.recipes"="python" "io.axocoatl.recipe-digest"="10128f1d87894aca578953f3e68efa4aa22cfcd00ed072a146470cbf730305b2"
+COMMIT localhost/axocoatl-recipe-python:10128f1d8789
+--> 96b3b0ff1b0d
+Successfully tagged localhost/axocoatl-recipe-python:10128f1d8789
+96b3b0ff1b0d865f602e9be0449780f37376b86e700b27abdddf8983d8628f51
+· built localhost/axocoatl-recipe-python:10128f1d8789 in 9 s (image id 96b3b0ff1b0d)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/python-pytest
+· run run-cef13cfe-86f5-4920-b8ac-455caf7c3139 in Session ses-21ed7467-33e5-4d29-ab29-71765bc07853
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+· note: setup `pip install -e '.[test]'` (detected): exited 0 (9.5 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-401e2f16-7b3d-4a99-95e9-ada5e953a33a started (run)
+· turn turn-401e2f16-7b3d-4a99-95e9-ada5e953a33a ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+  setup `pip install -e '.[test]'` (detected): exited 0 (9.5 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 4214 input + 214 output tokens, $0.0000
+Network: 19 recorded events, 4 allowed and 0 refused connections, 0 route requests
+Record: run-cef13cfe-86f5-4920-b8ac-455caf7c3139
+· JUnit written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-pytest/junit.xml
+· record written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-pytest/run.axorecord.jsonl
+· receipt written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-pytest/receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on python-pytest (30.1s)
+gate: PASS  run on python-pytest chose a python image
+gate: PASS  run on python-pytest ran setup (pip install)
+gate: RUN   receipt verify on python-pytest (documented command)
+receipt of run run-cef13cfe-86f5-4920-b8ac-455caf7c3139, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-pytest/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on python-pytest (documented command) (0.0s)
+gate: RUN   record verify on python-pytest
+valid: run run-cef13cfe-86f5-4920-b8ac-455caf7c3139 in Session ses-21ed7467-33e5-4d29-ab29-71765bc07853, written by Axocoatl 1.5.1, 40 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 19
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on python-pytest (0.0s)
+gate: RUN   receipt matches the record on python-pytest
+receipt of run run-cef13cfe-86f5-4920-b8ac-455caf7c3139, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-pytest/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on python-pytest (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on python-pytest
+gate: PASS  the model fixed python-pytest once
+gate: RUN   run fix on rust
+· building the run's image localhost/axocoatl-recipe-rust:0e5acf3d40e2 (rust, from docker.io/library/rust:1.99.1-slim-bookworm): about 330 MB to download, about 920 MB on disk, once on this computer; later runs reuse it
+STEP 1/7: FROM docker.io/library/rust:1.99.1-slim-bookworm@sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c
+Trying to pull docker.io/library/rust@sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c...
+Getting image source signatures
+Copying blob sha256:d91d943bace8daceb8c1e41b6612775cf31c1984310499cdf2461a61dab40230
+Copying blob sha256:c75f989a229d12b2d2613a5997de9ff3546f664c22da9248720033a2410220f6
+Copying config sha256:0f6781aa444f7d2edc2cae835158914ee0784fe651b899f12eee6e55f7d61b88
+Writing manifest to image destination
+STEP 2/7: RUN export DEBIAN_FRONTEND=noninteractive  && apt-get update -qq  && apt-get install -y --no-install-recommends ca-certificates git make  && rm -rf /var/lib/apt/lists/*  && chmod -R go-w /usr/local/cargo /usr/local/rustup  && for command in sh git env grep tee rm mkdir mv cp cat head tail od wc find realpath ls rmdir test sha256sum base64; do       command -v "$command" >/dev/null || { echo "toolchain base lacks $command" >&2; exit 1; };     done
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  git-man libbrotli1 libcurl3-gnutls liberror-perl libexpat1 libgdbm-compat4
+  libgdbm6 libldap-2.5-0 libnghttp2-14 libperl5.36 libpsl5 librtmp1 libsasl2-2
+  libsasl2-modules-db libssh2-1 perl perl-base perl-modules-5.36
+Suggested packages:
+  gettext-base git-daemon-run | git-daemon-sysvinit git-doc git-email git-gui
+  gitk gitweb git-cvs git-mediawiki git-svn gdbm-l10n sensible-utils make-doc
+  perl-doc libterm-readline-gnu-perl | libterm-readline-perl-perl
+  libtap-harness-archive-perl
+Recommended packages:
+  patch less ssh-client libldap-common publicsuffix libsasl2-modules netbase
+The following NEW packages will be installed:
+  git git-man libbrotli1 libcurl3-gnutls liberror-perl libexpat1
+  libgdbm-compat4 libgdbm6 libldap-2.5-0 libnghttp2-14 libperl5.36 libpsl5
+  librtmp1 libsasl2-2 libsasl2-modules-db libssh2-1 make perl
+  perl-modules-5.36
+The following packages will be upgraded:
+  ca-certificates perl-base
+2 upgraded, 19 newly installed, 0 to remove and 4 not upgraded.
+Need to get 19.8 MB of archives.
+After this operation, 105 MB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian-security bookworm-security/main arm64 perl-base arm64 5.36.0-7+deb12u4 [1478 kB]
+Get:2 http://deb.debian.org/debian-security bookworm-security/main arm64 perl-modules-5.36 all 5.36.0-7+deb12u4 [2817 kB]
+Get:3 http://deb.debian.org/debian bookworm/main arm64 libgdbm6 arm64 1.23-3 [70.9 kB]
+Get:4 http://deb.debian.org/debian bookworm/main arm64 libgdbm-compat4 arm64 1.23-3 [48.0 kB]
+Get:5 http://deb.debian.org/debian-security bookworm-security/main arm64 libperl5.36 arm64 5.36.0-7+deb12u4 [4002 kB]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main arm64 perl arm64 5.36.0-7+deb12u4 [239 kB]
+Get:7 http://deb.debian.org/debian-security bookworm-security/main arm64 ca-certificates all 20250419~deb12u2 [161 kB]
+Get:8 http://deb.debian.org/debian-security bookworm-security/main arm64 libbrotli1 arm64 1.0.9-2+deb12u1 [267 kB]
+Get:9 http://deb.debian.org/debian bookworm/main arm64 libsasl2-modules-db arm64 2.1.28+dfsg-10 [20.8 kB]
+Get:10 http://deb.debian.org/debian bookworm/main arm64 libsasl2-2 arm64 2.1.28+dfsg-10 [58.0 kB]
+Get:11 http://deb.debian.org/debian bookworm/main arm64 libldap-2.5-0 arm64 2.5.13+dfsg-5 [171 kB]
+Get:12 http://deb.debian.org/debian bookworm/main arm64 libnghttp2-14 arm64 1.52.0-1+deb12u3 [69.0 kB]
+Get:13 http://deb.debian.org/debian bookworm/main arm64 libpsl5 arm64 0.21.2-1 [58.6 kB]
+Get:14 http://deb.debian.org/debian bookworm/main arm64 librtmp1 arm64 2.4+20151223.gitfa8646d.1-2+b2 [59.4 kB]
+Get:15 http://deb.debian.org/debian-security bookworm-security/main arm64 libssh2-1 arm64 1.10.0-3+deb12u1 [169 kB]
+Get:16 http://deb.debian.org/debian bookworm/main arm64 libcurl3-gnutls arm64 7.88.1-10+deb12u15 [362 kB]
+Get:17 http://deb.debian.org/debian-security bookworm-security/main arm64 libexpat1 arm64 2.5.0-1+deb12u5 [91.7 kB]
+Get:18 http://deb.debian.org/debian bookworm/main arm64 liberror-perl all 0.17029-2 [29.0 kB]
+Get:19 http://deb.debian.org/debian bookworm/main arm64 git-man all 1:2.39.5-0+deb12u3 [2053 kB]
+Get:20 http://deb.debian.org/debian bookworm/main arm64 git arm64 1:2.39.5-0+deb12u3 [7153 kB]
+Get:21 http://deb.debian.org/debian bookworm/main arm64 make arm64 4.3-4.1 [391 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 19.8 MB in 0s (156 MB/s)
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 9060 files and directories currently installed.)
+Preparing to unpack .../perl-base_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking perl-base (5.36.0-7+deb12u4) over (5.36.0-7+deb12u3) ...
+Setting up perl-base (5.36.0-7+deb12u4) ...
+Selecting previously unselected package perl-modules-5.36.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 9060 files and directories currently installed.)
+Preparing to unpack .../00-perl-modules-5.36_5.36.0-7+deb12u4_all.deb ...
+Unpacking perl-modules-5.36 (5.36.0-7+deb12u4) ...
+Selecting previously unselected package libgdbm6:arm64.
+Preparing to unpack .../01-libgdbm6_1.23-3_arm64.deb ...
+Unpacking libgdbm6:arm64 (1.23-3) ...
+Selecting previously unselected package libgdbm-compat4:arm64.
+Preparing to unpack .../02-libgdbm-compat4_1.23-3_arm64.deb ...
+Unpacking libgdbm-compat4:arm64 (1.23-3) ...
+Selecting previously unselected package libperl5.36:arm64.
+Preparing to unpack .../03-libperl5.36_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking libperl5.36:arm64 (5.36.0-7+deb12u4) ...
+Selecting previously unselected package perl.
+Preparing to unpack .../04-perl_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking perl (5.36.0-7+deb12u4) ...
+Preparing to unpack .../05-ca-certificates_20250419~deb12u2_all.deb ...
+Unpacking ca-certificates (20250419~deb12u2) over (20250419~deb12u1) ...
+Selecting previously unselected package libbrotli1:arm64.
+Preparing to unpack .../06-libbrotli1_1.0.9-2+deb12u1_arm64.deb ...
+Unpacking libbrotli1:arm64 (1.0.9-2+deb12u1) ...
+Selecting previously unselected package libsasl2-modules-db:arm64.
+Preparing to unpack .../07-libsasl2-modules-db_2.1.28+dfsg-10_arm64.deb ...
+Unpacking libsasl2-modules-db:arm64 (2.1.28+dfsg-10) ...
+Selecting previously unselected package libsasl2-2:arm64.
+Preparing to unpack .../08-libsasl2-2_2.1.28+dfsg-10_arm64.deb ...
+Unpacking libsasl2-2:arm64 (2.1.28+dfsg-10) ...
+Selecting previously unselected package libldap-2.5-0:arm64.
+Preparing to unpack .../09-libldap-2.5-0_2.5.13+dfsg-5_arm64.deb ...
+Unpacking libldap-2.5-0:arm64 (2.5.13+dfsg-5) ...
+Selecting previously unselected package libnghttp2-14:arm64.
+Preparing to unpack .../10-libnghttp2-14_1.52.0-1+deb12u3_arm64.deb ...
+Unpacking libnghttp2-14:arm64 (1.52.0-1+deb12u3) ...
+Selecting previously unselected package libpsl5:arm64.
+Preparing to unpack .../11-libpsl5_0.21.2-1_arm64.deb ...
+Unpacking libpsl5:arm64 (0.21.2-1) ...
+Selecting previously unselected package librtmp1:arm64.
+Preparing to unpack .../12-librtmp1_2.4+20151223.gitfa8646d.1-2+b2_arm64.deb ...
+Unpacking librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Selecting previously unselected package libssh2-1:arm64.
+Preparing to unpack .../13-libssh2-1_1.10.0-3+deb12u1_arm64.deb ...
+Unpacking libssh2-1:arm64 (1.10.0-3+deb12u1) ...
+Selecting previously unselected package libcurl3-gnutls:arm64.
+Preparing to unpack .../14-libcurl3-gnutls_7.88.1-10+deb12u15_arm64.deb ...
+Unpacking libcurl3-gnutls:arm64 (7.88.1-10+deb12u15) ...
+Selecting previously unselected package libexpat1:arm64.
+Preparing to unpack .../15-libexpat1_2.5.0-1+deb12u5_arm64.deb ...
+Unpacking libexpat1:arm64 (2.5.0-1+deb12u5) ...
+Selecting previously unselected package liberror-perl.
+Preparing to unpack .../16-liberror-perl_0.17029-2_all.deb ...
+Unpacking liberror-perl (0.17029-2) ...
+Selecting previously unselected package git-man.
+Preparing to unpack .../17-git-man_1%3a2.39.5-0+deb12u3_all.deb ...
+Unpacking git-man (1:2.39.5-0+deb12u3) ...
+Selecting previously unselected package git.
+Preparing to unpack .../18-git_1%3a2.39.5-0+deb12u3_arm64.deb ...
+Unpacking git (1:2.39.5-0+deb12u3) ...
+Selecting previously unselected package make.
+Preparing to unpack .../19-make_4.3-4.1_arm64.deb ...
+Unpacking make (4.3-4.1) ...
+Setting up libexpat1:arm64 (2.5.0-1+deb12u5) ...
+Setting up libpsl5:arm64 (0.21.2-1) ...
+Setting up libbrotli1:arm64 (1.0.9-2+deb12u1) ...
+Setting up libnghttp2-14:arm64 (1.52.0-1+deb12u3) ...
+Setting up libsasl2-modules-db:arm64 (2.1.28+dfsg-10) ...
+Setting up ca-certificates (20250419~deb12u2) ...
+Updating certificates in /etc/ssl/certs...
+rehash: warning: skipping ca-certificates.crt,it does not contain exactly one certificate or CRL
+0 added, 2 removed; done.
+Setting up perl-modules-5.36 (5.36.0-7+deb12u4) ...
+Setting up make (4.3-4.1) ...
+Setting up librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Setting up libsasl2-2:arm64 (2.1.28+dfsg-10) ...
+Setting up git-man (1:2.39.5-0+deb12u3) ...
+Setting up libssh2-1:arm64 (1.10.0-3+deb12u1) ...
+Setting up libgdbm6:arm64 (1.23-3) ...
+Setting up libldap-2.5-0:arm64 (2.5.13+dfsg-5) ...
+Setting up libgdbm-compat4:arm64 (1.23-3) ...
+Setting up libperl5.36:arm64 (5.36.0-7+deb12u4) ...
+Setting up libcurl3-gnutls:arm64 (7.88.1-10+deb12u15) ...
+Setting up perl (5.36.0-7+deb12u4) ...
+Setting up liberror-perl (0.17029-2) ...
+Setting up git (1:2.39.5-0+deb12u3) ...
+Processing triggers for libc-bin (2.36-9+deb12u14) ...
+Processing triggers for ca-certificates (20250419~deb12u2) ...
+Updating certificates in /etc/ssl/certs...
+0 added, 0 removed; done.
+Running hooks in /etc/ca-certificates/update.d...
+done.
+--> 6b5c33055404
+STEP 3/7: LABEL io.axocoatl.role=recipe       io.axocoatl.recipe.base=rust-1.99.1-slim-bookworm
+--> 65930d730050
+STEP 4/7: ENV AXOCOATL_TOOLCHAIN=rust     AXOCOATL_CACHE=/opt/axocoatl-cache     CARGO_HOME=/opt/axocoatl-cache/rust/cargo     CARGO_TARGET_DIR=/tmp/axocoatl-cargo-target     CARGO_TERM_COLOR=never
+--> 62dd0cc3a9e9
+STEP 5/7: RUN mkdir -p /opt/axocoatl-cache  && cargo --version  && rustc --version
+cargo 1.99.1 (5f94df478 2026-08-27)
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
+--> e175eb91c8ff
+STEP 6/7: LABEL io.axocoatl.toolchain=rust       io.axocoatl.toolchain.version=rust-1.99.1
+--> c43878dc9e00
+STEP 7/7: LABEL "io.axocoatl.role"="recipe" "io.axocoatl.recipes"="rust" "io.axocoatl.recipe-digest"="0e5acf3d40e2de35b3f87070539362c211f6850c0983c94ec5d8859d4bfe81bc"
+COMMIT localhost/axocoatl-recipe-rust:0e5acf3d40e2
+--> 6b99e04b0741
+Successfully tagged localhost/axocoatl-recipe-rust:0e5acf3d40e2
+6b99e04b0741b1e3b90445ca7c10ca435fdd3510b523ae98fe8bb3c3eff23187
+· built localhost/axocoatl-recipe-rust:0e5acf3d40e2 in 21 s (image id 6b99e04b0741)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/rust
+· run run-fb1998b6-46e9-4b84-b996-5e8252d66650 in Session ses-4e358428-5498-4d0e-9b16-9bf38a4efd9e
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-rust:0e5acf3d40e2 · toolchain rust (Cargo.toml at the repository root) · check cargo test (detected from the repository) · setup cargo fetch (detected; registries index.crates.io, static.crates.io, crates.io open for it alone)
+· note: setup `cargo fetch` (detected): exited 0 (0.7 s); 2 connections to index.crates.io, static.crates.io, crates.io allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-086cfac2-a72e-4dcb-adec-f615d278c118 started (run)
+· turn turn-086cfac2-a72e-4dcb-adec-f615d278c118 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-rust:0e5acf3d40e2 · toolchain rust (Cargo.toml at the repository root) · check cargo test (detected from the repository) · setup cargo fetch (detected; registries index.crates.io, static.crates.io, crates.io open for it alone)
+  setup `cargo fetch` (detected): exited 0 (0.7 s); 2 connections to index.crates.io, static.crates.io, crates.io allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 5550 input + 231 output tokens, $0.0000
+Network: 17 recorded events, 2 allowed and 0 refused connections, 0 route requests
+Record: run-fb1998b6-46e9-4b84-b996-5e8252d66650
+· JUnit written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/rust/junit.xml
+· record written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/rust/run.axorecord.jsonl
+· receipt written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/rust/receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on rust (35.9s)
+gate: PASS  run on rust chose a rust image
+gate: PASS  run on rust ran setup (cargo fetch)
+gate: RUN   receipt verify on rust (documented command)
+receipt of run run-fb1998b6-46e9-4b84-b996-5e8252d66650, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/rust/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on rust (documented command) (0.0s)
+gate: RUN   record verify on rust
+valid: run run-fb1998b6-46e9-4b84-b996-5e8252d66650 in Session ses-4e358428-5498-4d0e-9b16-9bf38a4efd9e, written by Axocoatl 1.5.1, 38 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 17
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on rust (0.0s)
+gate: RUN   receipt matches the record on rust
+receipt of run run-fb1998b6-46e9-4b84-b996-5e8252d66650, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/rust/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on rust (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on rust
+gate: PASS  the model fixed rust once
+gate: RUN   run fix on go
+· building the run's image localhost/axocoatl-recipe-go:6063b3e9fdc6 (go, from docker.io/library/golang:1.27.2-bookworm): about 300 MB to download, about 880 MB on disk, once on this computer; later runs reuse it
+STEP 1/8: FROM docker.io/library/golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61
+Trying to pull docker.io/library/golang@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61...
+Getting image source signatures
+Copying blob sha256:ed8596846564c78501630a9cfb5ea37bccebbeae1111d217c47835ed2572f772
+Copying blob sha256:2a02c40189e361a19e7cb07374fe9925f5c4f7db254ae2b9196348c27c286b03
+Copying blob sha256:4fd4b86f6eba05ede1422fdf209774d4fb36cfafce2fa8138b82406a3b5fa8be
+Copying blob sha256:99713dbe79ee22ead7509cd8c7c37d309206e5ddd834ba41611459b49e6ddc06
+Copying blob sha256:c488414f4e10f9495a8ef36b033a81ae04a3d43955e64f351a4247848f292d26
+Copying blob sha256:bdc7363672c63abfefdedaf5e03be8e39cb662841d4f31237c4b7d7e3729f65c
+Copying blob sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1
+Copying config sha256:8daab0ae6527cc929bebbfbce0d6e4c7ba363d6213264ffeb5d5bd559d4a03a7
+Writing manifest to image destination
+STEP 2/8: ENV GOPATH=     PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+--> bcb6879cfaad
+STEP 3/8: RUN rm -rf /go  && for command in sh git env grep tee rm mkdir mv cp cat head tail od wc find realpath ls rmdir test sha256sum base64 make; do       command -v "$command" >/dev/null || { echo "toolchain base lacks $command" >&2; exit 1; };     done
+--> cc46a1bd0046
+STEP 4/8: LABEL io.axocoatl.role=recipe       io.axocoatl.recipe.base=golang-1.27.2-bookworm
+--> df39202f311c
+STEP 5/8: ENV AXOCOATL_TOOLCHAIN=go     AXOCOATL_CACHE=/opt/axocoatl-cache     GOMODCACHE=/opt/axocoatl-cache/go/mod     GOPROXY=off     GOTOOLCHAIN=local
+--> c15746a55d90
+STEP 6/8: RUN mkdir -p /opt/axocoatl-cache  && go version  && [ -z "$(go env GOPATH | grep -x /go)" ]
+go version go1.27.2 linux/arm64
+--> ba9ccb8c1171
+STEP 7/8: LABEL io.axocoatl.toolchain=go       io.axocoatl.toolchain.version=go-1.27.2
+--> e83463d605cf
+STEP 8/8: LABEL "io.axocoatl.role"="recipe" "io.axocoatl.recipes"="go" "io.axocoatl.recipe-digest"="6063b3e9fdc655be7776387d4368e64af54312c17ad69476691d854308b36d90"
+COMMIT localhost/axocoatl-recipe-go:6063b3e9fdc6
+--> c82bd1d67eb2
+Successfully tagged localhost/axocoatl-recipe-go:6063b3e9fdc6
+c82bd1d67eb2d6d1cddcd355355a60d5dd0d6a84fe78d57568dfa3aaf8a16459
+· built localhost/axocoatl-recipe-go:6063b3e9fdc6 in 7 s (image id c82bd1d67eb2)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/go
+· run run-ca1fca97-0d48-46ca-b91b-04c26cc72525 in Session ses-9333a0f6-4d26-4bdd-9ae2-6a15d6c84ec7
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download (detected; registries proxy.golang.org, sum.golang.org open for it alone)
+· note: setup `GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download` (detected): exited 0 (0.5 s); 1 connections to proxy.golang.org, sum.golang.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-3d7f0dd9-586f-4abd-b884-1f0432aec2a6 started (run)
+· turn turn-3d7f0dd9-586f-4abd-b884-1f0432aec2a6 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download (detected; registries proxy.golang.org, sum.golang.org open for it alone)
+  setup `GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download` (detected): exited 0 (0.5 s); 1 connections to proxy.golang.org, sum.golang.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 5865 input + 268 output tokens, $0.0000
+Network: 13 recorded events, 1 allowed and 0 refused connections, 0 route requests
+Record: run-ca1fca97-0d48-46ca-b91b-04c26cc72525
+· JUnit written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/go/junit.xml
+· record written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/go/run.axorecord.jsonl
+· receipt written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/go/receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on go (36.6s)
+gate: PASS  run on go chose a go image
+gate: PASS  run on go ran setup (go mod download)
+gate: RUN   receipt verify on go (documented command)
+receipt of run run-ca1fca97-0d48-46ca-b91b-04c26cc72525, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/go/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on go (documented command) (0.0s)
+gate: RUN   record verify on go
+valid: run run-ca1fca97-0d48-46ca-b91b-04c26cc72525 in Session ses-9333a0f6-4d26-4bdd-9ae2-6a15d6c84ec7, written by Axocoatl 1.5.1, 34 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 13
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on go (0.0s)
+gate: RUN   receipt matches the record on go
+receipt of run run-ca1fca97-0d48-46ca-b91b-04c26cc72525, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/go/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on go (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on go
+gate: PASS  the model fixed go once
+gate: RUN   run fix on node-pnpm
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/node-pnpm
+· run run-b6f80ac6-ae63-4df1-a49e-ebba4c8935fa in Session ses-3a895b25-0609-491b-8a34-de3194af05ab
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup pnpm install --frozen-lockfile --prefer-offline --store-dir "$AXOCOATL_CACHE/node/pnpm-store" (detected; registries registry.npmjs.org open for it alone)
+· note: setup `pnpm install --frozen-lockfile --prefer-offline --store-dir "$AXOCOATL_CACHE/node/pnpm-store"` (detected): exited 0 (2.7 s); 7 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-53e95593-fb09-491b-842e-f1855deed16b started (run)
+· turn turn-53e95593-fb09-491b-842e-f1855deed16b ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup pnpm install --frozen-lockfile --prefer-offline --store-dir "$AXOCOATL_CACHE/node/pnpm-store" (detected; registries registry.npmjs.org open for it alone)
+  setup `pnpm install --frozen-lockfile --prefer-offline --store-dir "$AXOCOATL_CACHE/node/pnpm-store"` (detected): exited 0 (2.7 s); 7 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 9386 input + 357 output tokens, $0.0000
+Network: 23 recorded events, 7 allowed and 0 refused connections, 0 route requests
+Record: run-b6f80ac6-ae63-4df1-a49e-ebba4c8935fa
+· JUnit written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-pnpm/junit.xml
+· record written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-pnpm/run.axorecord.jsonl
+· receipt written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-pnpm/receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on node-pnpm (12.0s)
+gate: PASS  run on node-pnpm chose a node image
+gate: PASS  run on node-pnpm ran setup (pnpm install --frozen-lockfile)
+gate: RUN   receipt verify on node-pnpm (documented command)
+receipt of run run-b6f80ac6-ae63-4df1-a49e-ebba4c8935fa, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-pnpm/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on node-pnpm (documented command) (0.0s)
+gate: RUN   record verify on node-pnpm
+valid: run run-b6f80ac6-ae63-4df1-a49e-ebba4c8935fa in Session ses-3a895b25-0609-491b-8a34-de3194af05ab, written by Axocoatl 1.5.1, 44 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 23
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on node-pnpm (0.0s)
+gate: RUN   receipt matches the record on node-pnpm
+receipt of run run-b6f80ac6-ae63-4df1-a49e-ebba4c8935fa, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-pnpm/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on node-pnpm (0.1s)
+gate: PASS  no tool-call markup in the accepted output of the run on node-pnpm
+gate: PASS  the model fixed node-pnpm once
+gate: RUN   run fix on node-yarn
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/node-yarn
+· run run-643217ed-f236-4ff3-a9f2-3444e6e776cb in Session ses-dcd63dbb-a6d6-44b7-bf6d-6d5e9e471fae
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup yarn install --frozen-lockfile --prefer-offline (detected; registries registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com open for it alone)
+· note: setup `yarn install --frozen-lockfile --prefer-offline` (detected): exited 0 (1.7 s); 8 connections to registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-1e8f2f6d-bf94-4122-a466-ce0649dec956 started (run)
+· turn turn-1e8f2f6d-bf94-4122-a466-ce0649dec956 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup yarn install --frozen-lockfile --prefer-offline (detected; registries registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com open for it alone)
+  setup `yarn install --frozen-lockfile --prefer-offline` (detected): exited 0 (1.7 s); 8 connections to registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 10282 input + 393 output tokens, $0.0000
+Network: 29 recorded events, 8 allowed and 0 refused connections, 0 route requests
+Record: run-643217ed-f236-4ff3-a9f2-3444e6e776cb
+· JUnit written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-yarn/junit.xml
+· record written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-yarn/run.axorecord.jsonl
+· receipt written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-yarn/receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on node-yarn (10.7s)
+gate: PASS  run on node-yarn chose a node image
+gate: PASS  run on node-yarn ran setup (yarn install --frozen-lockfile)
+gate: RUN   receipt verify on node-yarn (documented command)
+receipt of run run-643217ed-f236-4ff3-a9f2-3444e6e776cb, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-yarn/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on node-yarn (documented command) (0.0s)
+gate: RUN   record verify on node-yarn
+valid: run run-643217ed-f236-4ff3-a9f2-3444e6e776cb in Session ses-dcd63dbb-a6d6-44b7-bf6d-6d5e9e471fae, written by Axocoatl 1.5.1, 50 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 29
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on node-yarn (0.0s)
+gate: RUN   receipt matches the record on node-yarn
+receipt of run run-643217ed-f236-4ff3-a9f2-3444e6e776cb, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-yarn/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on node-yarn (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on node-yarn
+gate: PASS  the model fixed node-yarn once
+gate: RUN   run fix on node-yarn-berry
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/node-yarn-berry
+· run run-fc5e6de8-a2b5-45d5-bd58-64b5e337f0e0 in Session ses-0acae9a3-ac39-4100-b3c3-0fe323bf824c
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup YARN_HTTPS_PROXY="$HTTPS_PROXY" YARN_HTTP_PROXY="$HTTP_PROXY" yarn install --immutable (detected; registries registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com open for it alone)
+· note: setup `YARN_HTTPS_PROXY="$HTTPS_PROXY" YARN_HTTP_PROXY="$HTTP_PROXY" yarn install --immutable` (detected): exited 0 (1.6 s); 7 connections to registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-45b1fdf2-85e2-4663-be05-728f6938f842 started (run)
+· turn turn-45b1fdf2-85e2-4663-be05-728f6938f842 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup YARN_HTTPS_PROXY="$HTTPS_PROXY" YARN_HTTP_PROXY="$HTTP_PROXY" yarn install --immutable (detected; registries registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com open for it alone)
+  setup `YARN_HTTPS_PROXY="$HTTPS_PROXY" YARN_HTTP_PROXY="$HTTP_PROXY" yarn install --immutable` (detected): exited 0 (1.6 s); 7 connections to registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 11294 input + 430 output tokens, $0.0000
+Network: 27 recorded events, 7 allowed and 0 refused connections, 0 route requests
+Record: run-fc5e6de8-a2b5-45d5-bd58-64b5e337f0e0
+· JUnit written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-yarn-berry/junit.xml
+· record written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-yarn-berry/run.axorecord.jsonl
+· receipt written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-yarn-berry/receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on node-yarn-berry (11.2s)
+gate: PASS  run on node-yarn-berry chose a node image
+gate: PASS  run on node-yarn-berry ran setup (yarn install --immutable)
+gate: RUN   receipt verify on node-yarn-berry (documented command)
+receipt of run run-fc5e6de8-a2b5-45d5-bd58-64b5e337f0e0, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-yarn-berry/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on node-yarn-berry (documented command) (0.0s)
+gate: RUN   record verify on node-yarn-berry
+valid: run run-fc5e6de8-a2b5-45d5-bd58-64b5e337f0e0 in Session ses-0acae9a3-ac39-4100-b3c3-0fe323bf824c, written by Axocoatl 1.5.1, 48 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 27
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on node-yarn-berry (0.0s)
+gate: RUN   receipt matches the record on node-yarn-berry
+receipt of run run-fc5e6de8-a2b5-45d5-bd58-64b5e337f0e0, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-yarn-berry/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on node-yarn-berry (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on node-yarn-berry
+gate: PASS  the model fixed node-yarn-berry once
+gate: RUN   run fix on python-poetry
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/python-poetry
+· run run-03337518-e423-4c86-a3e4-4e62e3f5bd0f in Session ses-fd657f6b-2dfb-4f04-a44a-9a0b33a99644
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8.0,<9' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+· note: setup `pip install -e . 'pytest>=8.0,<9'` (detected): exited 0 (8.5 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-a7a94791-e50f-47ad-b8b7-0052eb5bfca6 started (run)
+· turn turn-a7a94791-e50f-47ad-b8b7-0052eb5bfca6 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8.0,<9' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+  setup `pip install -e . 'pytest>=8.0,<9'` (detected): exited 0 (8.5 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 10491 input + 466 output tokens, $0.0000
+Network: 19 recorded events, 4 allowed and 0 refused connections, 0 route requests
+Record: run-03337518-e423-4c86-a3e4-4e62e3f5bd0f
+· JUnit written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-poetry/junit.xml
+· record written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-poetry/run.axorecord.jsonl
+· receipt written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-poetry/receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on python-poetry (18.1s)
+gate: PASS  run on python-poetry chose a python image
+gate: PASS  run on python-poetry ran setup ('pytest>=8.0,<9')
+gate: RUN   receipt verify on python-poetry (documented command)
+receipt of run run-03337518-e423-4c86-a3e4-4e62e3f5bd0f, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-poetry/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on python-poetry (documented command) (0.0s)
+gate: RUN   record verify on python-poetry
+valid: run run-03337518-e423-4c86-a3e4-4e62e3f5bd0f in Session ses-fd657f6b-2dfb-4f04-a44a-9a0b33a99644, written by Axocoatl 1.5.1, 40 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 19
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on python-poetry (0.0s)
+gate: RUN   receipt matches the record on python-poetry
+receipt of run run-03337518-e423-4c86-a3e4-4e62e3f5bd0f, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-poetry/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on python-poetry (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on python-poetry
+gate: PASS  the model fixed python-poetry once
+gate: RUN   run fix on python-uv
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/python-uv
+· run run-7fc8eb8d-f6f1-4c80-9b23-bb5e3ee17825 in Session ses-04496f8b-001b-4bea-81d9-978844423549
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+· note: setup `pip install -e . 'pytest>=8'` (detected): exited 0 (9.1 s); 6 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-d85b7284-6133-4d13-97f0-bbfd6a275bfb started (run)
+· turn turn-d85b7284-6133-4d13-97f0-bbfd6a275bfb ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+  setup `pip install -e . 'pytest>=8'` (detected): exited 0 (9.1 s); 6 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 11486 input + 504 output tokens, $0.0000
+Network: 23 recorded events, 6 allowed and 0 refused connections, 0 route requests
+Record: run-7fc8eb8d-f6f1-4c80-9b23-bb5e3ee17825
+· JUnit written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-uv/junit.xml
+· record written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-uv/run.axorecord.jsonl
+· receipt written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-uv/receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on python-uv (18.5s)
+gate: PASS  run on python-uv chose a python image
+gate: PASS  run on python-uv ran setup (pip install -e . 'pytest>=8')
+gate: RUN   receipt verify on python-uv (documented command)
+receipt of run run-7fc8eb8d-f6f1-4c80-9b23-bb5e3ee17825, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-uv/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on python-uv (documented command) (0.0s)
+gate: RUN   record verify on python-uv
+valid: run run-7fc8eb8d-f6f1-4c80-9b23-bb5e3ee17825 in Session ses-04496f8b-001b-4bea-81d9-978844423549, written by Axocoatl 1.5.1, 44 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 23
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on python-uv (0.0s)
+gate: RUN   receipt matches the record on python-uv
+receipt of run run-7fc8eb8d-f6f1-4c80-9b23-bb5e3ee17825, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-uv/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on python-uv (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on python-uv
+gate: PASS  the model fixed python-uv once
+gate: RUN   run fix on python-pdm
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/python-pdm
+· run run-dab638fe-e6d8-4b47-8f73-ac2b44f0765e in Session ses-6865e702-594c-427f-8c3c-ba9e6e83d924
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+· note: setup `pip install -e . 'pytest>=8'` (detected): exited 0 (7.7 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-ef4ca2bf-50b1-4356-9f55-2d98b83269ad started (run)
+· turn turn-ef4ca2bf-50b1-4356-9f55-2d98b83269ad ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+  setup `pip install -e . 'pytest>=8'` (detected): exited 0 (7.7 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 12548 input + 538 output tokens, $0.0000
+Network: 19 recorded events, 4 allowed and 0 refused connections, 0 route requests
+Record: run-dab638fe-e6d8-4b47-8f73-ac2b44f0765e
+· JUnit written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-pdm/junit.xml
+· record written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-pdm/run.axorecord.jsonl
+· receipt written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-pdm/receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on python-pdm (17.5s)
+gate: PASS  run on python-pdm chose a python image
+gate: PASS  run on python-pdm ran setup (pip install -e . 'pytest>=8')
+gate: RUN   receipt verify on python-pdm (documented command)
+receipt of run run-dab638fe-e6d8-4b47-8f73-ac2b44f0765e, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-pdm/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on python-pdm (documented command) (0.0s)
+gate: RUN   record verify on python-pdm
+valid: run run-dab638fe-e6d8-4b47-8f73-ac2b44f0765e in Session ses-6865e702-594c-427f-8c3c-ba9e6e83d924, written by Axocoatl 1.5.1, 40 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 19
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on python-pdm (0.0s)
+gate: RUN   receipt matches the record on python-pdm
+receipt of run run-dab638fe-e6d8-4b47-8f73-ac2b44f0765e, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-pdm/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on python-pdm (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on python-pdm
+gate: PASS  the model fixed python-pdm once
+gate: RUN   run fix on python-hatch
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.rnJ30x/repos/python-hatch
+· run run-92c2c97b-235e-4372-b0bd-8f79a2dee2cf in Session ses-a72ac1ad-2557-4ba4-a200-6467482f87a1
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+· note: setup `pip install -e . 'pytest>=8'` (detected): exited 0 (8.9 s); 6 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-eb61d96b-92f0-494a-9e92-f3f736e7ca1c started (run)
+· turn turn-eb61d96b-92f0-494a-9e92-f3f736e7ca1c ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+  setup `pip install -e . 'pytest>=8'` (detected): exited 0 (8.9 s); 6 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 13648 input + 577 output tokens, $0.0000
+Network: 23 recorded events, 6 allowed and 0 refused connections, 0 route requests
+Record: run-92c2c97b-235e-4372-b0bd-8f79a2dee2cf
+· JUnit written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-hatch/junit.xml
+· record written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-hatch/run.axorecord.jsonl
+· receipt written to /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-hatch/receipt.json (key cd86e66b2fcff979, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on python-hatch (18.7s)
+gate: PASS  run on python-hatch chose a python image
+gate: PASS  run on python-hatch ran setup (pip install -e . 'pytest>=8')
+gate: RUN   receipt verify on python-hatch (documented command)
+receipt of run run-92c2c97b-235e-4372-b0bd-8f79a2dee2cf, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+files: 1 covered and 0 removed match . (judged_capture)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-hatch/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt verify on python-hatch (documented command) (0.0s)
+gate: RUN   record verify on python-hatch
+valid: run run-92c2c97b-235e-4372-b0bd-8f79a2dee2cf in Session ses-a72ac1ad-2557-4ba4-a200-6467482f87a1, written by Axocoatl 1.5.1, 44 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 23
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on python-hatch (0.0s)
+gate: RUN   receipt matches the record on python-hatch
+receipt of run run-92c2c97b-235e-4372-b0bd-8f79a2dee2cf, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-hatch/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on python-hatch (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on python-hatch
+gate: PASS  the model fixed python-hatch once
+gate: PASS  the README's command passed on every fixture, each receipt and record verified
+gate: RUN   a check program that is absent: exit 3
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+axocoatl run: the check `npm run test` cannot run in this run's image: the program `axocoatl-gate-absent-check-program` was not found. Image: localhost/axocoatl-recipe-node:3b267c748259, with the node toolchain (package.json at the repository root). No writer or reviewer turn ran. To fix it: declare it in package.json's devDependencies, or give its install with --setup "COMMAND", where COMMAND installs axocoatl-gate-absent-check-program; pass --toolchain LANGUAGE when the check runs another language, where LANGUAGE is node, python, rust or go; pass --image IMAGE of an image that has it; pass --check "COMMAND" for a check this image can run; use a loadout whose environment provides it; or pass --no-probe to run anyway when the probe is wrong about this check
+gate: PASS  a check program that is absent: exit 3 (6.2s)
+gate: PASS  refused within 15 s
+gate: PASS  refused before any model call (0 tokens)
+gate: RUN   reviewer anthropic:x: exit 3
+axocoatl run: the reviewer runs anthropic:x, on the provider anthropic, and a native Agent or reviewer runs only on Ollama or OpenRouter (Claude Code and Codex can write, in fix-claude-code and fix-codex, but cannot review): pass --model reviewer=ollama:MODEL or --model reviewer=openrouter:VENDOR/MODEL
+gate: PASS  reviewer anthropic:x: exit 3 (0.1s)
+gate: PASS  no Session, container or model call for the refused run
+gate: RUN   onboard without Podman: exit 1
+Axocoatl setup
+Every command this runs is logged to /tmp/axo-gate.rnJ30x/home-no-podman/.local/state/axocoatl/onboard-20261028-203736.log
+
+Step 0 · This computer
+This computer: Ubuntu 24.04.5 LTS, aarch64, 16 GB memory, 4 cores, 103 GB free.
+Found: Ollama 0.40.6 at http://127.0.0.1:45859 (cloud models off), gh, git 2.56.0, a running Axocoatl daemon.
+Not found: Podman, claude, codex.
+
+Step 1 · Who writes the code
+  Writer: A local model on this computer (Ollama, no account, needs 48 GB memory or more) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+  Refresh apt package lists now with `sudo apt-get update`? This downloads current package metadata from your configured repositories and asks for your password.
+    → not done: it needs sudo, and --yes runs sudo only with --allow-sudo
+  ✗ Refresh package lists, then install Podman: sudo apt-get update && sudo apt-get install -y podman
+
+Step 3 · A local writer and reviewer (Ollama)
+  ✓ Ollama 0.40.6 at http://127.0.0.1:45859, cloud models off (2 models installed)
+  ✓ qwen3-coder:30b is installed
+  ✓ gpt-oss:20b is installed
+  Loading qwen3-coder:30b once to read its context…
+  ✓ qwen3-coder:30b: 32768-token context, contract probes passed
+  Loading gpt-oss:20b once to read its context…
+  ✓ gpt-oss:20b: 32768-token context, contract probes passed
+
+Step 4 · The configuration
+  The new configuration sets:
+    `axocoatl run fix`: writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b
+    Workbench Sessions: Lead, Scout and the chat Assistant on ollama:qwen3-coder:30b, Reviewer on ollama:gpt-oss:20b
+    Ollama server: http://127.0.0.1:45859
+    Workbench port: 8200
+  ✓ Configuration written: /tmp/axo-gate.rnJ30x/home-no-podman/.config/axocoatl/config.yaml
+  ✓ Data: /tmp/axo-gate.rnJ30x/home-no-podman/.local/share/axocoatl
+
+Step 5 · Check
+  ✗ Podman is not installed; it is needed for every Session and every axocoatl run
+  ! gh: not signed in; `axocoatl run --keep pr` needs it
+
+Not ready yet, 1 step left:
+  1) Refresh package lists, then install Podman: sudo apt-get update && sudo apt-get install -y podman
+Run `axocoatl onboard` again once they are done; it keeps what is already set up.
+gate: PASS  onboard without Podman: exit 1 (0.1s)
+gate: PASS  onboard prints the Podman install command
+gate: PASS  onboard did not run sudo without --allow-sudo (PATH)
+gate: PASS  onboard did not run sudo without --allow-sudo (system journal)
+gate: RUN   onboard without a subuid range: exit 1
+Axocoatl setup
+Every command this runs is logged to /tmp/axo-gate.rnJ30x/home-no-subuid/.local/state/axocoatl/onboard-20261028-203737.log
+
+Step 0 · This computer
+This computer: Ubuntu 24.04.5 LTS, aarch64, 16 GB memory, 4 cores, 103 GB free.
+Found: Podman 4.9.3 (ready), Ollama 0.40.6 at http://127.0.0.1:45859 (cloud models off), gh, git 2.56.0, a running Axocoatl daemon.
+Not found: claude, codex.
+
+Step 1 · Who writes the code
+  Writer: A local model on this computer (Ollama, no account, needs 48 GB memory or more) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+  runner has no range of subordinate user and group IDs in /etc/subuid and /etc/subgid, so rootless Podman cannot unpack images or start Sessions. Add a range with `sudo usermod --add-subuids 165536-231071 --add-subgids 165536-231071 runner && podman system migrate`? `podman system migrate` stops your running containers.
+    → not done: it needs sudo, and --yes runs sudo only with --allow-sudo
+  ✗ runner has no range of subordinate user and group IDs in /etc/subuid and /etc/subgid, so rootless Podman cannot unpack images or start Sessions: sudo usermod --add-subuids 165536-231071 --add-subgids 165536-231071 runner && podman system migrate
+  ✓ Landlock ABI 8
+
+Step 3 · A local writer and reviewer (Ollama)
+  ✓ Ollama 0.40.6 at http://127.0.0.1:45859, cloud models off (2 models installed)
+  ✓ qwen3-coder:30b is installed
+  ✓ gpt-oss:20b is installed
+  Loading qwen3-coder:30b once to read its context…
+  ✓ qwen3-coder:30b: 32768-token context, contract probes passed
+  Loading gpt-oss:20b once to read its context…
+  ✓ gpt-oss:20b: 32768-token context, contract probes passed
+
+Step 4 · The configuration
+  The new configuration sets:
+    `axocoatl run fix`: writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b
+    Workbench Sessions: Lead, Scout and the chat Assistant on ollama:qwen3-coder:30b, Reviewer on ollama:gpt-oss:20b
+    Ollama server: http://127.0.0.1:45859
+    Workbench port: 8200
+  ✓ Configuration written: /tmp/axo-gate.rnJ30x/home-no-subuid/.config/axocoatl/config.yaml
+  ✓ Data: /tmp/axo-gate.rnJ30x/home-no-subuid/.local/share/axocoatl
+
+Step 5 · Check
+  ✗ User ID ranges: runner has no range of subordinate user and group IDs in /etc/subuid and /etc/subgid, so rootless Podman cannot unpack images or start Sessions
+  ! gh: not signed in; `axocoatl run --keep pr` needs it
+
+Not ready yet, 1 step left:
+  1) runner has no range of subordinate user and group IDs in /etc/subuid and /etc/subgid, so rootless Podman cannot unpack images or start Sessions: sudo usermod --add-subuids 165536-231071 --add-subgids 165536-231071 runner && podman system migrate
+Run `axocoatl onboard` again once they are done; it keeps what is already set up.
+gate: PASS  onboard without a subuid range: exit 1 (3.0s)
+gate: PASS  onboard names the usermod --add-subuids fix
+gate: PASS  onboard did not run sudo for the subuid range (PATH)
+gate: PASS  onboard did not run sudo for the subuid range (system journal)
+gate: RUN   doctor --json without a subuid range
+gate: PASS  doctor --json without a subuid range (1.4s)
+gate: PASS  doctor FAILs the subuid range with the usermod fix
+gate: restored /etc/subuid and /etc/subgid
+gate: RUN   install the lint's YAML parser (npm ci in sites/docs)
+
+added 382 packages in 5s
+gate: PASS  install the lint's YAML parser (npm ci in sites/docs) (5.4s)
+gate: RUN   copy-paste lint (scripts/check-copy-paste.mjs)
+Copy-paste check passed: 23 files, 69 shell blocks and copy buttons, 10 YAML snippets.
+gate: PASS  copy-paste lint (scripts/check-copy-paste.mjs) (0.1s)
+gate: PASS  Ctrl+C stops axocoatl dev with exit 0
+A-arm: PASS (132/132 steps passed)
+gate: evidence: /home/runner/work/axocoatl/axocoatl/release-evidence/1.5.1/ac7e760a729eace5fb99a0e1147c78100c43709e/A-arm.json

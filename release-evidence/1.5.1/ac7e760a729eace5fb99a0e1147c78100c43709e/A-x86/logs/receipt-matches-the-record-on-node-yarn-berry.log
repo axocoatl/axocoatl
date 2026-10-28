@@ -1,0 +1,4 @@
+receipt of run run-e1768c11-73e5-4484-87c9-f7eaa2951072, verdict pass
+signature: valid, by trusted key 4855dafb8de6e339 (sha256:4855dafb8de6e3395d557ce98e1930e67fd7d1e857a1f72d2a16814b345584d6)
+record: /tmp/axo-gate-record.y6FIOY/fixture-outputs/node-yarn-berry/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)

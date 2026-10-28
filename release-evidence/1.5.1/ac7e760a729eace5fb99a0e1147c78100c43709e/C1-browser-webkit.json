@@ -1,0 +1,76 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "C1-browser-webkit",
+  "tier": "C",
+  "version": "1.5.1",
+  "commit": "ac7e760a729eace5fb99a0e1147c78100c43709e",
+  "pass": true,
+  "started_at": "2026-10-28T20:16:45Z",
+  "finished_at": "2026-10-28T20:28:25.650Z",
+  "steps": [
+    {
+      "name": "the archive matches its .sha256",
+      "status": "pass",
+      "required": true,
+      "detail": "a0c1048940e85de5e3515a4ec6c37d4eea530df88a482998affd7f19de476525"
+    },
+    {
+      "name": "unpack the candidate's binary",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.2,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "the binary is 1.5.1",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "Podman answers",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.4,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "product browser journeys in WebKit on macOS with Podman",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 697.2,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "the run's summary",
+      "status": "pass",
+      "required": true,
+      "detail": "Browser regressions (webkit): 43 files, 332 tests: 332 passed, 0 failed, 0 skipped."
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.1",
+    "ollama": null
+  },
+  "attachments": [
+    "C1-browser-webkit/logs/Podman-answers.log",
+    "C1-browser-webkit/logs/product-browser-journeys-in-WebKit-on-macOS-with-Podman.log",
+    "C1-browser-webkit/logs/unpack-the-candidate-s-binary.log",
+    "C1-browser-webkit/transcript.txt"
+  ]
+}

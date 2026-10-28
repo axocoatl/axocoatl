@@ -1,0 +1,4 @@
+receipt of run run-cef13cfe-86f5-4920-b8ac-455caf7c3139, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/python-pytest/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)

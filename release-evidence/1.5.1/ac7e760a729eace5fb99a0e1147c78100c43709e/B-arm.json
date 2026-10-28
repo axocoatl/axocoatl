@@ -1,0 +1,213 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "B-arm",
+  "tier": "B",
+  "version": "1.5.1",
+  "commit": "ac7e760a729eace5fb99a0e1147c78100c43709e",
+  "pass": true,
+  "started_at": "2026-10-28T20:41:17Z",
+  "finished_at": "2026-10-28T20:41:39.189Z",
+  "steps": [
+    {
+      "name": "start without axocoatl or podman on PATH",
+      "status": "pass",
+      "required": true,
+      "detail": "HOME=/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.o7I9o2/home"
+    },
+    {
+      "name": "scripted model server",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "install with the published command",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 1.2,
+      "bytes_downloaded": 14819,
+      "detail": "curl -fsSL https://axocoatl.ai/install.sh | sh"
+    },
+    {
+      "name": "installed binary is where the installer said",
+      "status": "pass",
+      "required": true,
+      "detail": "/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.o7I9o2/home/.local/bin/axocoatl"
+    },
+    {
+      "name": "a new shell finds axocoatl",
+      "status": "pass",
+      "required": true,
+      "detail": "after adding the line the installer printed to /var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.o7I9o2/home/.zprofile (case \":$PATH:\" in *\":$HOME/.local/bin:\"*) ;; *) export PATH=\"$HOME/.local/bin:$PATH\" ;; esac): zsh -ilc: /var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.o7I9o2/home/.local/bin/axocoatl"
+    },
+    {
+      "name": "axocoatl --version names 1.5.1",
+      "status": "pass",
+      "required": true,
+      "detail": "axocoatl 1.5.1"
+    },
+    {
+      "name": "doctor --json, Podman none",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "detail": "a FAIL whose fix names: brew install podman | doctor: fail Podman; ok Platform; ok Sandbox network; ok Sandbox workload"
+    },
+    {
+      "name": "doctor --json, Podman no-machine",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "detail": "a FAIL whose fix runs podman machine init | doctor: fail Podman; warn Podman version; ok Platform; ok Sandbox network; ok Sandbox workload"
+    },
+    {
+      "name": "doctor --json, Podman stopped",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "detail": "OK: the stopped machine starts on first use; no FAIL | doctor: ok Podman; warn Podman version; ok Platform; ok Sandbox network; ok Sandbox workload"
+    },
+    {
+      "name": "doctor --json, Podman running",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "detail": "OK: ready; no FAIL | doctor: ok Podman; warn Podman version; ok Platform; ok Sandbox network; ok Sandbox workload"
+    },
+    {
+      "name": "doctor --json, Podman rootful",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "detail": "a FAIL whose fix switches the machine to rootless | doctor: ok Podman; warn Podman version; fail Rootless; ok Platform; ok Sandbox network; ok Sandbox workload"
+    },
+    {
+      "name": "doctor --json, Podman podman6",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "detail": "Podman 6.1.4 is tested: no version WARN; a WARN naming the untested libkrun provider; no FAIL | doctor: ok Podman; warn Machine provider; ok Platform; ok Sandbox network; ok Sandbox workload"
+    },
+    {
+      "name": "doctor --json, Podman none-no-brew",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "detail": "a FAIL whose fix names the podman.io installer, not onboarding installing Podman | doctor: fail Podman; ok Platform; ok Sandbox network; ok Sandbox workload"
+    },
+    {
+      "name": "onboard --plan, Podman none: asks or says what to do",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "detail": "Install Podman now with `brew install podman`"
+    },
+    {
+      "name": "onboard --plan, Podman none: changed nothing",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboard --plan, Podman no-machine: asks or says what to do",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "detail": "would ask: Create the Podman machine your Sessions run in?"
+    },
+    {
+      "name": "onboard --plan, Podman no-machine: changed nothing",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboard --plan, Podman stopped: asks or says what to do",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "detail": "would ask: Start podman-machine-default now? (`podman machine start`)"
+    },
+    {
+      "name": "onboard --plan, Podman stopped: changed nothing",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboard --plan, Podman none-no-brew: asks or says what to do",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "detail": "https://podman.io"
+    },
+    {
+      "name": "onboard --plan, Podman none-no-brew: changed nothing",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "doctor and --plan ran only read-only podman commands",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "a run with the stand-in's machine stopped (it ends at its first container command)",
+      "status": "fail",
+      "required": false,
+      "exit_code": 5,
+      "seconds": 5.7,
+      "bytes_downloaded": 48360,
+      "detail": "exit 5, expected 0: · checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment axocoatl run: first local start could not prove containers exposing control-plane root '/private/tmp/axo-adm.vDhbCk/Library/Application Support/Axocoatl/data' absent: OCI container execution failed: listing legacy Axocoatl containers: podman stand-in (running): `podman ps -a --no-trunc --filter name=axo-ses- --format {{.ID}}\t{{.Names}}` is not available in Tier B "
+    },
+    {
+      "name": "a run's admission started the stopped machine (podman machine start)",
+      "status": "pass",
+      "required": true,
+      "detail": "the run called `podman machine start`; the stand-in's machine runs now"
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 15.7.9",
+    "kernel": "24.6.0",
+    "arch": "arm64",
+    "runner": "github-hosted macos15 20260907.0337.1",
+    "memory_bytes": 7516192768,
+    "cpus": 3,
+    "user": "runner"
+  },
+  "tools": {
+    "podman": null,
+    "git": "2.55.0",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.1",
+    "ollama": null
+  },
+  "attachments": [
+    "B-arm/doctor-no-machine.json",
+    "B-arm/doctor-none-no-brew.json",
+    "B-arm/doctor-none.json",
+    "B-arm/doctor-podman6.json",
+    "B-arm/doctor-rootful.json",
+    "B-arm/doctor-running.json",
+    "B-arm/doctor-stopped.json",
+    "B-arm/install-command.txt",
+    "B-arm/logs/a-run-with-the-stand-in-s-machine-stopped--it-ends-at-its-first-container-comman.log",
+    "B-arm/logs/admission-dev.log",
+    "B-arm/logs/doctor-no-machine.log",
+    "B-arm/logs/doctor-none-no-brew.log",
+    "B-arm/logs/doctor-none.log",
+    "B-arm/logs/doctor-podman6.log",
+    "B-arm/logs/doctor-rootful.log",
+    "B-arm/logs/doctor-running.log",
+    "B-arm/logs/doctor-stopped.log",
+    "B-arm/logs/install-curl-urls.log",
+    "B-arm/logs/install.log",
+    "B-arm/logs/onboard-plan-no-machine.log",
+    "B-arm/logs/onboard-plan-none-no-brew.log",
+    "B-arm/logs/onboard-plan-none.log",
+    "B-arm/logs/onboard-plan-stopped.log",
+    "B-arm/logs/podman-calls.log",
+    "B-arm/logs/stub-model-server.jsonl",
+    "B-arm/logs/stub-model-server.log",
+    "B-arm/transcript.txt"
+  ]
+}

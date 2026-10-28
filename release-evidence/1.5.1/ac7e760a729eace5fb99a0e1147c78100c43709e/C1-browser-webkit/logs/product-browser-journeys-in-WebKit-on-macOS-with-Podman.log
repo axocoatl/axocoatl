@@ -1,0 +1,2023 @@
+
+added 2 packages, and audited 3 packages in 574ms
+
+found 0 vulnerabilities
+found 0 vulnerabilities
+
+> test:no-build
+> node support/run-tests.mjs --no-build
+
+Browser regressions on webkit
+TAP version 13
+# Subtest: a file is rerun only when each of its failures followed a detected browser crash
+ok 1 - a file is rerun only when each of its failures followed a detected browser crash
+  ---
+  duration_ms: 1.078834
+  type: 'test'
+  ...
+# Subtest: more crashed files than the cap reruns none and fails; a bare non-zero exit fails
+ok 2 - more crashed files than the cap reruns none and fails; a bare non-zero exit fails
+  ---
+  duration_ms: 0.512583
+  type: 'test'
+  ...
+# Subtest: a page the browser never finishes creating fails as a browser crash, and is closed if it comes
+ok 3 - a page the browser never finishes creating fails as a browser crash, and is closed if it comes
+  ---
+  duration_ms: 132.501708
+  type: 'test'
+  ...
+# Subtest: the report keeps each browser crash line with the test it was printed under
+ok 4 - the report keeps each browser crash line with the test it was printed under
+  ---
+  duration_ms: 120.4415
+  type: 'test'
+  ...
+# Subtest: a lost sign-in and a browser that died are printed under their tests, and a plain failure is not
+ok 5 - a lost sign-in and a browser that died are printed under their tests, and a plain failure is not
+  ---
+  duration_ms: 8875.648834
+  type: 'test'
+  ...
+# Subtest: AXO_BROWSER_ENGINE=webkit makes the tests' chromium WebKit; chromium leaves it alone
+ok 6 - AXO_BROWSER_ENGINE=webkit makes the tests' chromium WebKit; chromium leaves it alone
+  ---
+  duration_ms: 899.405875
+  type: 'test'
+  ...
+# Subtest: another engine launches without Chrome's executable path or Chromium flags
+ok 7 - another engine launches without Chrome's executable path or Chromium flags
+  ---
+  duration_ms: 327.522166
+  type: 'test'
+  ...
+# Subtest: before-turn graph adopts the approved native Session team when its response arrives late
+ok 8 - before-turn graph adopts the approved native Session team when its response arrives late
+  ---
+  duration_ms: 3176.484833
+  type: 'test'
+  ...
+# Subtest: real control-plane route is exact, versioned, read-only and survives daemon restart
+ok 9 - real control-plane route is exact, versioned, read-only and survives daemon restart
+  ---
+  duration_ms: 5428.226875
+  type: 'test'
+  ...
+# Subtest: real human command route refuses extended authority and never executes against legacy history
+ok 10 - real human command route refuses extended authority and never executes against legacy history
+  ---
+  duration_ms: 13.030875
+  type: 'test'
+  ...
+# Subtest: versioned legacy list, lookup, search and exports preserve opaque identity and original context
+ok 11 - versioned legacy list, lookup, search and exports preserve opaque identity and original context
+  ---
+  duration_ms: 1931.492709
+  type: 'test'
+  ...
+# Subtest: a legacy multi-Agent turn is refused before it starts and names the upgrade command
+ok 12 - a legacy multi-Agent turn is refused before it starts and names the upgrade command
+  ---
+  duration_ms: 19.900833
+  type: 'test'
+  ...
+# Subtest: actual Begin resolves retained evidence into provider input and pins it across restart
+ok 13 - actual Begin resolves retained evidence into provider input and pins it across restart
+  ---
+  duration_ms: 8680.485875
+  type: 'test'
+  ...
+# Forged body/hash, foreign owner/turn, and wrong generation rejected before Begin or provider dispatch.
+# The actual Ollama request and fsynced Begin contain the same exact retained evidence and SHA-256.
+# Daemon restart and exact retry preserve captured bytes and return SessionDone without another provider call; conflicting retry cannot replace Begin.
+# Subtest: control-plane fold reads both versioned history envelopes and never infers a graph from a raw turn
+ok 14 - control-plane fold reads both versioned history envelopes and never infers a graph from a raw turn
+  ---
+  duration_ms: 2213.83175
+  type: 'test'
+  ...
+# Subtest: unsupported or malformed control-plane data removes stale graphs and executable controls
+ok 15 - unsupported or malformed control-plane data removes stale graphs and executable controls
+  ---
+  duration_ms: 334.445584
+  type: 'test'
+  ...
+# Subtest: malformed scalar envelopes fold as unsupported with no nodes
+ok 16 - malformed scalar envelopes fold as unsupported with no nodes
+  ---
+  duration_ms: 205.574291
+  type: 'test'
+  ...
+# Subtest: the real graph consumer clears unsupported history before consulting current Settings
+ok 17 - the real graph consumer clears unsupported history before consulting current Settings
+  ---
+  duration_ms: 216.18675
+  type: 'test'
+  ...
+# Subtest: accepted native work opens exact Turn controls before any output or transcript repaint
+ok 18 - accepted native work opens exact Turn controls before any output or transcript repaint
+  ---
+  duration_ms: 409.121542
+  type: 'test'
+  ...
+# Subtest: Escape closes only the activation inspector and restores its graph opener (light)
+ok 19 - Escape closes only the activation inspector and restores its graph opener (light)
+  ---
+  duration_ms: 382.11925
+  type: 'test'
+  ...
+# Subtest: selected activation inspector shares durable projection and preserves selection (light)
+ok 20 - selected activation inspector shares durable projection and preserves selection (light)
+  ---
+  duration_ms: 291.847666
+  type: 'test'
+  ...
+# Subtest: Escape closes only the activation inspector and restores its graph opener (dark)
+ok 21 - Escape closes only the activation inspector and restores its graph opener (dark)
+  ---
+  duration_ms: 334.820916
+  type: 'test'
+  ...
+# Subtest: selected activation inspector shares durable projection and preserves selection (dark)
+ok 22 - selected activation inspector shares durable projection and preserves selection (dark)
+  ---
+  duration_ms: 332.342042
+  type: 'test'
+  ...
+# Subtest: an absent pinned activation never falls back to a newer recorded generation
+ok 23 - an absent pinned activation never falls back to a newer recorded generation
+  ---
+  duration_ms: 283.79125
+  type: 'test'
+  ...
+# Subtest: settled Stop refreshes its still-running exact activation until Retry becomes visible
+ok 24 - settled Stop refreshes its still-running exact activation until Retry becomes visible
+  ---
+  duration_ms: 2691.847167
+  type: 'test'
+  ...
+# Subtest: legacy inspector never invents a generation, output, definition, usage or executable control
+ok 25 - legacy inspector never invents a generation, output, definition, usage or executable control
+  ---
+  duration_ms: 206.148667
+  type: 'test'
+  ...
+# Subtest: inspector keeps one bounded dialog across responsive transitions and labels recorded empty output
+ok 26 - inspector keeps one bounded dialog across responsive transitions and labels recorded empty output
+  ---
+  duration_ms: 368.937333
+  type: 'test'
+  ...
+# Subtest: inspector selection uses exact activation identity when epochs reuse a generation
+ok 27 - inspector selection uses exact activation identity when epochs reuse a generation
+  ---
+  duration_ms: 250.174708
+  type: 'test'
+  ...
+# Subtest: retained legacy direct-target turn exposes only its recorded Agent and attributed output
+ok 28 - retained legacy direct-target turn exposes only its recorded Agent and attributed output
+  ---
+  duration_ms: 222.720291
+  type: 'test'
+  ...
+# Subtest: Add to chat emits only a typed exact retained reference, including the execution epoch
+ok 29 - Add to chat emits only a typed exact retained reference, including the execution epoch
+  ---
+  duration_ms: 275.72775
+  type: 'test'
+  ...
+# Subtest: legacy Add to chat requires a recorded evidence reference
+ok 30 - legacy Add to chat requires a recorded evidence reference
+  ---
+  duration_ms: 241.424083
+  type: 'test'
+  ...
+# Subtest: exact human controls preserve draft choices and show durable receipts (light)
+ok 31 - exact human controls preserve draft choices and show durable receipts (light)
+  ---
+  duration_ms: 515.454375
+  type: 'test'
+  ...
+# Subtest: exact human controls preserve draft choices and show durable receipts (dark)
+ok 32 - exact human controls preserve draft choices and show durable receipts (dark)
+  ---
+  duration_ms: 491.025333
+  type: 'test'
+  ...
+# Subtest: whole-turn Stop shows exact never-started node evidence without inventing an activation
+ok 33 - whole-turn Stop shows exact never-started node evidence without inventing an activation
+  ---
+  duration_ms: 225.932916
+  type: 'test'
+  ...
+# Subtest: Guide uses the actual command consumer and retains an unacknowledged exact request across reload
+ok 34 - Guide uses the actual command consumer and retains an unacknowledged exact request across reload
+  ---
+  duration_ms: 518.361166
+  type: 'test'
+  ...
+# Subtest: human response uses the exact live wait and preserves a lost response across reload (light)
+ok 35 - human response uses the exact live wait and preserves a lost response across reload (light)
+  ---
+  duration_ms: 591.072042
+  type: 'test'
+  ...
+# Subtest: human response uses the exact live wait and preserves a lost response across reload (dark)
+ok 36 - human response uses the exact live wait and preserves a lost response across reload (dark)
+  ---
+  duration_ms: 632.9065
+  type: 'test'
+  ...
+# Subtest: graph refresh bounds pending reads and rejects a response for a replaced turn
+ok 37 - graph refresh bounds pending reads and rejects a response for a replaced turn
+  ---
+  duration_ms: 234.034791
+  type: 'test'
+  ...
+# Subtest: reloaded atomic Revise continuation keeps its exact target and Revise label
+ok 38 - reloaded atomic Revise continuation keeps its exact target and Revise label
+  ---
+  duration_ms: 233.664125
+  type: 'test'
+  ...
+# Subtest: recovered controls submit exact requests through the existing validator (light)
+ok 39 - recovered controls submit exact requests through the existing validator (light)
+  ---
+  duration_ms: 539.410417
+  type: 'test'
+  ...
+# Subtest: recovered controls submit exact requests through the existing validator (dark)
+ok 40 - recovered controls submit exact requests through the existing validator (dark)
+  ---
+  duration_ms: 467.8185
+  type: 'test'
+  ...
+# Subtest: partial Finish requires exact review and explicit sink selection (light)
+ok 41 - partial Finish requires exact review and explicit sink selection (light)
+  ---
+  duration_ms: 441.88175
+  type: 'test'
+  ...
+# Subtest: partial Finish requires exact review and explicit sink selection (dark)
+ok 42 - partial Finish requires exact review and explicit sink selection (dark)
+  ---
+  duration_ms: 441.121042
+  type: 'test'
+  ...
+# Subtest: never-started native descendants are blocked by the current failed generation and unblock after Retry
+ok 43 - never-started native descendants are blocked by the current failed generation and unblock after Retry
+  ---
+  duration_ms: 224.244541
+  type: 'test'
+  ...
+# Subtest: turn controls show each required check with its failed output and name the check to rerun (light)
+ok 44 - turn controls show each required check with its failed output and name the check to rerun (light)
+  ---
+  duration_ms: 317.063833
+  type: 'test'
+  ...
+# Subtest: turn controls show each required check with its failed output and name the check to rerun (dark)
+ok 45 - turn controls show each required check with its failed output and name the check to rerun (dark)
+  ---
+  duration_ms: 324.574583
+  type: 'test'
+  ...
+# Subtest: turn controls show the required review's verdict, findings and round, and rerun it by name (light)
+ok 46 - turn controls show the required review's verdict, findings and round, and rerun it by name (light)
+  ---
+  duration_ms: 308.619875
+  type: 'test'
+  ...
+# Subtest: turn controls show the required review's verdict, findings and round, and rerun it by name (dark)
+ok 47 - turn controls show the required review's verdict, findings and round, and rerun it by name (dark)
+  ---
+  duration_ms: 324.8415
+  type: 'test'
+  ...
+# Subtest: Agent graph draws a delegated edge from a lead to its helper without making it a dependency
+ok 48 - Agent graph draws a delegated edge from a lead to its helper without making it a dependency
+  ---
+  duration_ms: 2617.231042
+  type: 'test'
+  ...
+# Subtest: versioned normalization preserves opaque legacy IDs and rejects malformed version and exact identities
+ok 49 - versioned normalization preserves opaque legacy IDs and rejects malformed version and exact identities
+  ---
+  duration_ms: 1769.64725
+  type: 'test'
+  ...
+# Subtest: history summary separates exact accepted, partial, truncated, observed and missing evidence
+ok 50 - history summary separates exact accepted, partial, truncated, observed and missing evidence
+  ---
+  duration_ms: 0.872334
+  type: 'test'
+  ...
+# Subtest: a provider retry validates and drops only the abandoned round of observed text
+ok 51 - a provider retry validates and drops only the abandoned round of observed text
+  ---
+  duration_ms: 0.799458
+  type: 'test'
+  ...
+# Subtest: how each model response ended is validated and leaves the observed text alone
+ok 52 - how each model response ended is validated and leaves the observed text alone
+  ---
+  duration_ms: 0.641875
+  type: 'test'
+  ...
+# Subtest: retained native context reopens its exact prior generation and Ways decision after reload
+ok 53 - retained native context reopens its exact prior generation and Ways decision after reload
+  ---
+  duration_ms: 578.194625
+  type: 'test'
+  ...
+# Subtest: stream invalidations coalesce slow reads and never lose a newly selected Session frame
+ok 54 - stream invalidations coalesce slow reads and never lose a newly selected Session frame
+  ---
+  duration_ms: 0.793791
+  type: 'test'
+  ...
+# Subtest: typed composer guidance presents human text while preserving exact retained metadata
+ok 55 - typed composer guidance presents human text while preserving exact retained metadata
+  ---
+  duration_ms: 0.450167
+  type: 'test'
+  ...
+# Subtest: unfinished native history preserves evidence and disables rewind (light)
+ok 56 - unfinished native history preserves evidence and disables rewind (light)
+  ---
+  duration_ms: 387.455125
+  type: 'test'
+  ...
+# Subtest: unfinished native history preserves evidence and disables rewind (dark)
+ok 57 - unfinished native history preserves evidence and disables rewind (dark)
+  ---
+  duration_ms: 283.254459
+  type: 'test'
+  ...
+# Subtest: Stop evidence preserves never-started nodes and rejects malformed or contradictory history
+ok 58 - Stop evidence preserves never-started nodes and rejects malformed or contradictory history
+  ---
+  duration_ms: 1.46525
+  type: 'test'
+  ...
+# Subtest: Stopped-before-start transcript never gains a generation or action row
+ok 59 - Stopped-before-start transcript never gains a generation or action row
+  ---
+  duration_ms: 184.184417
+  type: 'test'
+  ...
+# Subtest: the observed route says how each model response ended
+ok 60 - the observed route says how each model response ended
+  ---
+  duration_ms: 181.26375
+  type: 'test'
+  ...
+# Subtest: guidance history binds exact amendments and separates recorded handoff, acknowledged input and unknown delivery
+ok 61 - guidance history binds exact amendments and separates recorded handoff, acknowledged input and unknown delivery
+  ---
+  duration_ms: 1.769958
+  type: 'test'
+  ...
+# Subtest: guidance stays visible in exact transcript, history and Context search (light)
+ok 62 - guidance stays visible in exact transcript, history and Context search (light)
+  ---
+  duration_ms: 397.469917
+  type: 'test'
+  ...
+# Subtest: guidance stays visible in exact transcript, history and Context search (dark)
+ok 63 - guidance stays visible in exact transcript, history and Context search (dark)
+  ---
+  duration_ms: 383.102208
+  type: 'test'
+  ...
+# Subtest: exact human-wait invalidation reloads retained history without inventing a stream event
+ok 64 - exact human-wait invalidation reloads retained history without inventing a stream event
+  ---
+  duration_ms: 1.269667
+  type: 'test'
+  ...
+# Subtest: closed native history exposes exact rewind boundary while preserving evidence
+ok 65 - closed native history exposes exact rewind boundary while preserving evidence
+  ---
+  duration_ms: 1273.555166
+  type: 'test'
+  ...
+# Subtest: Ways settlement shares bounded history invalidation with streams and ignores duplicate or foreign results
+ok 66 - Ways settlement shares bounded history invalidation with streams and ignores duplicate or foreign results
+  ---
+  duration_ms: 0.972375
+  type: 'test'
+  ...
+# Subtest: actual Ways result consumer refreshes stale native conversation acceptance without a final token
+ok 67 - actual Ways result consumer refreshes stale native conversation acceptance without a final token
+  ---
+  duration_ms: 625.477458
+  type: 'test'
+  ...
+# Subtest: partial Finish history retains selected results, skipped work and unmet checks without changing raw acceptance
+ok 68 - partial Finish history retains selected results, skipped work and unmet checks without changing raw acceptance
+  ---
+  duration_ms: 0.713125
+  type: 'test'
+  ...
+# Subtest: Ways retains separate explicit budgets per heterogeneous attempt and rejects missing or expired approval
+ok 69 - Ways retains separate explicit budgets per heterogeneous attempt and rejects missing or expired approval
+  ---
+  duration_ms: 2663.010125
+  type: 'test'
+  ...
+# Subtest: Ways says plainly that the Session team's required checks do not run on attempts
+ok 70 - Ways says plainly that the Session team's required checks do not run on attempts
+  ---
+  duration_ms: 421.281791
+  type: 'test'
+  ...
+# Subtest: Keep stays disabled unless the run passed
+ok 71 - Keep stays disabled unless the run passed
+  ---
+  duration_ms: 2402.343375
+  type: 'test'
+  ...
+# Subtest: Keep as branch posts the run and shows the branch, commit and paths
+ok 72 - Keep as branch posts the run and shows the branch, commit and paths
+  ---
+  duration_ms: 565.395875
+  type: 'test'
+  ...
+# Subtest: Open pull request confirms the remote, branch and base before pushing
+ok 73 - Open pull request confirms the remote, branch and base before pushing
+  ---
+  duration_ms: 522.135208
+  type: 'test'
+  ...
+# Subtest: A refusal is shown as such and nothing is reported kept
+ok 74 - A refusal is shown as such and nothing is reported kept
+  ---
+  duration_ms: 366.947542
+  type: 'test'
+  ...
+# Subtest: the audit loadout plans two areas, runs a read-only worker per area and integrates their findings
+ok 75 - the audit loadout plans two areas, runs a read-only worker per area and integrates their findings
+  ---
+  duration_ms: 18743.537792
+  type: 'test'
+  ...
+# Subtest: an audit of a repository only its owner may enter reads it and changes nothing
+ok 76 - an audit of a repository only its owner may enter reads it and changes nothing
+  ---
+  duration_ms: 11920.891042
+  type: 'test'
+  ...
+# Subtest: the built-in fix loadout runs under egress, passes, warns about the same model and keeps its change as a branch
+ok 77 - the built-in fix loadout runs under egress, passes, warns about the same model and keeps its change as a branch
+  ---
+  duration_ms: 18862.121792
+  type: 'test'
+  ...
+# Subtest: Ctrl-C stops a running loadout run: exit 6, the run interrupted, and its JUnit and record still written
+ok 78 - Ctrl-C stops a running loadout run: exit 6, the run interrupted, and its JUnit and record still written
+  ---
+  duration_ms: 11685.262666
+  type: 'test'
+  ...
+# Subtest: the loadout API lists built-in and user loadouts, shows a graph and validates text, behind the API token
+ok 79 - the loadout API lists built-in and user loadouts, shows a graph and validates text, behind the API token
+  ---
+  duration_ms: 6277.540834
+  type: 'test'
+  ...
+# Subtest: a custom loadout runs headless in a hardened Session: 202, events, JUnit and a verifiable record from axocoatl run
+ok 80 - a custom loadout runs headless in a hardened Session: 202, events, JUnit and a verifiable record from axocoatl run
+  ---
+  duration_ms: 8659.753417
+  type: 'test'
+  ...
+# Subtest: Settings → Loadouts lists loadouts, shows invalid files and keeps the graph read-only
+ok 81 - Settings → Loadouts lists loadouts, shows invalid files and keeps the graph read-only
+  ---
+  duration_ms: 983.891583
+  type: 'test'
+  ...
+# Subtest: a loadout Session shows its loadout badge and the run outcome panel in the workbench
+ok 82 - a loadout Session shows its loadout badge and the run outcome panel in the workbench
+  ---
+  duration_ms: 564.942125
+  type: 'test'
+  ...
+# Subtest: a signed-out browser gets the sign-in page and the API refuses it
+ok 83 - a signed-out browser gets the sign-in page and the API refuses it
+  ---
+  duration_ms: 2075.299417
+  type: 'test'
+  ...
+# Subtest: the sign-in link sets an HttpOnly cookie, drops the token from the URL and opens the workbench
+ok 84 - the sign-in link sets an HttpOnly cookie, drops the token from the URL and opens the workbench
+  ---
+  duration_ms: 540.8695
+  type: 'test'
+  ...
+# Subtest: a localhost sign-in link and a localhost bookmark both reach the workbench at 127.0.0.1
+ok 85 - a localhost sign-in link and a localhost bookmark both reach the workbench at 127.0.0.1
+  ---
+  duration_ms: 3428.091416
+  type: 'test'
+  ...
+# Subtest: opening the workbench at localhost removes an old localhost sign-in cookie
+ok 86 - opening the workbench at localhost removes an old localhost sign-in cookie
+  ---
+  duration_ms: 208.437917
+  type: 'test'
+  ...
+# Subtest: once signed in, a link from another site to the loopback IP or localhost still needs one Continue click
+ok 87 - once signed in, a link from another site to the loopback IP or localhost still needs one Continue click
+  ---
+  duration_ms: 3678.717958
+  type: 'test'
+  ...
+# Subtest: a wrong sign-in link sets no cookie
+ok 88 - a wrong sign-in link sets no cookie
+  ---
+  duration_ms: 186.43
+  type: 'test'
+  ...
+# Subtest: a sign-in link opened from another site needs one Continue click
+ok 89 - a sign-in link opened from another site needs one Continue click
+  ---
+  duration_ms: 684.34175
+  type: 'test'
+  ...
+# Subtest: Node clients need the token as a header
+ok 90 - Node clients need the token as a header
+  ---
+  duration_ms: 14.649875
+  type: 'test'
+  ...
+# Subtest: a Session MCP decision survives reconnect and renders honest denied and approved evidence
+ok 91 - a Session MCP decision survives reconnect and renders honest denied and approved evidence
+  ---
+  duration_ms: 3324.126125
+  type: 'test'
+  ...
+# Subtest: the first native turn on the suggested budget fills Last turn, across a restart, and commits as the person
+ok 92 - the first native turn on the suggested budget fills Last turn, across a restart, and commits as the person
+  ---
+  duration_ms: 18119.034542
+  type: 'test'
+  ...
+# Subtest: the network panel shows mode, counts, policy and refused rows, and allows a refused host
+ok 93 - the network panel shows mode, counts, policy and refused rows, and allows a refused host
+  ---
+  duration_ms: 2635.489917
+  type: 'test'
+  ...
+# Subtest: a provisioning refusal cannot widen the Session policy, and Session warnings are shown
+ok 94 - a provisioning refusal cannot widen the Session policy, and Session warnings are shown
+  ---
+  duration_ms: 223.679292
+  type: 'test'
+  ...
+# Subtest: requests on egress routes show what each asked for and how it ended
+ok 95 - requests on egress routes show what each asked for and how it ended
+  ---
+  duration_ms: 319.056334
+  type: 'test'
+  ...
+# Subtest: a request the route to Ollama refused because its cloud features were not off says so
+ok 96 - a request the route to Ollama refused because its cloud features were not off says so
+  ---
+  duration_ms: 225.874791
+  type: 'test'
+  ...
+# Subtest: connections are listed newest first, and in a hardened Session each names its program
+ok 97 - connections are listed newest first, and in a hardened Session each names its program
+  ---
+  duration_ms: 303.358333
+  type: 'test'
+  ...
+# Subtest: without program identities the panel has no program column
+ok 98 - without program identities the panel has no program column
+  ---
+  duration_ms: 237.861375
+  type: 'test'
+  ...
+# Subtest: a lost allow is resent with the same command id and a 409 for it counts as applied
+ok 99 - a lost allow is resent with the same command id and a 409 for it counts as applied
+  ---
+  duration_ms: 323.836625
+  type: 'test'
+  ...
+# Subtest: Agents' host requests wait for a person, who approves or rejects each
+ok 100 - Agents' host requests wait for a person, who approves or rejects each
+  ---
+  duration_ms: 323.036209
+  type: 'test'
+  ...
+# Subtest: a lost approval is resent with the same command id and a 409 for it counts as applied
+ok 101 - a lost approval is resent with the same command id and a 409 for it counts as applied
+  ---
+  duration_ms: 295.390375
+  type: 'test'
+  ...
+# Subtest: a refused browser request is allowed in the browser scope
+ok 102 - a refused browser request is allowed in the browser scope
+  ---
+  duration_ms: 281.329917
+  type: 'test'
+  ...
+# Subtest: the reload and proposal routes of the real daemon answer as documented
+ok 103 - the reload and proposal routes of the real daemon answer as documented
+  ---
+  duration_ms: 26.01075
+  type: 'test'
+  ...
+# Subtest: a failed proxy is shown as a banner
+ok 104 - a failed proxy is shown as a banner
+  ---
+  duration_ms: 231.725375
+  type: 'test'
+  ...
+# Subtest: the activation inspector shows network evidence and opens the Session network panel
+ok 105 - the activation inspector shows network evidence and opens the Session network panel
+  ---
+  duration_ms: 276.700583
+  type: 'test'
+  ...
+# Subtest: a top-level page's non-ASCII, forged and 40 x 1 KB localhost cookies never reach the workbench, and no Preview app receives an axocoatl-token cookie
+ok 106 - a top-level page's non-ASCII, forged and 40 x 1 KB localhost cookies never reach the workbench, and no Preview app receives an axocoatl-token cookie
+  ---
+  duration_ms: 16462.236167
+  type: 'test'
+  ...
+# Subtest: a forged signed-in cookie sends a signed-out browser through the retry page at most once
+ok 107 - a forged signed-in cookie sends a signed-out browser through the retry page at most once
+  ---
+  duration_ms: 4631.2565
+  type: 'test'
+  ...
+# Subtest: the workbench shows the real Preview embedded; in Safari it offers no full page, the Preview cannot open itself in a window, and a real Command-click in the Preview or Files frame gets the refusal page; elsewhere Open full preview and the Preview's own window.open open it in a tab
+ok 108 - the workbench shows the real Preview embedded; in Safari it offers no full page, the Preview cannot open itself in a window, and a real Command-click in the Preview or Files frame gets the refusal page; elsewhere Open full preview and the Preview's own window.open open it in a tab
+  ---
+  duration_ms: 4783.596709
+  type: 'test'
+  ...
+# Subtest: a Session's app is never published at the workbench's address, and a Preview that loads the app's published port in a frame gets none of the workbench's cookies
+ok 109 - a Session's app is never published at the workbench's address, and a Preview that loads the app's published port in a frame gets none of the workbench's cookies
+  ---
+  duration_ms: 1164.677834
+  type: 'test'
+  ...
+# Subtest: with iPhone and iPad user agents a typed Preview gets the refusal page, a framed one is served, and WebKit keeps Previews embedded
+ok 110 - with iPhone and iPad user agents a typed Preview gets the refusal page, a framed one is served, and WebKit keeps Previews embedded
+  ---
+  duration_ms: 2526.671417
+  type: 'test'
+  ...
+# Subtest: with Chrome's user agent, WebKit gets the refusal page for a typed Preview and keeps Previews embedded, and Chromium is served
+ok 111 - with Chrome's user agent, WebKit gets the refusal page for a typed Preview and keeps Previews embedded, and Chromium is served
+  ---
+  duration_ms: 387.351667
+  type: 'test'
+  ...
+# Subtest: in Safari no Preview page runs top-level, typed, redirected or through the legacy path, which refuses every browser page in every engine
+ok 112 - in Safari no Preview page runs top-level, typed, redirected or through the legacy path, which refuses every browser page in every engine
+  ---
+  duration_ms: 30289.737166
+  type: 'test'
+  ...
+# Subtest: Safari on macOS: Safari's engine on an Apple platform
+ok 113 - Safari on macOS: Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.724375
+  type: 'test'
+  ...
+# Subtest: Playwright WebKit 27.2 on macOS: Safari's engine on an Apple platform
+ok 114 - Playwright WebKit 27.2 on macOS: Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.090167
+  type: 'test'
+  ...
+# Subtest: Playwright WebKit 27.2 on Linux: Safari's engine on an Apple platform
+ok 115 - Playwright WebKit 27.2 on Linux: Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.237208
+  type: 'test'
+  ...
+# Subtest: Safari on iPhone: Safari's engine on an Apple platform
+ok 116 - Safari on iPhone: Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.050791
+  type: 'test'
+  ...
+# Subtest: Safari on iPad, desktop site: Safari's engine on an Apple platform
+ok 117 - Safari on iPad, desktop site: Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.142
+  type: 'test'
+  ...
+# Subtest: Chrome on iPhone (WebKit): Safari's engine on an Apple platform
+ok 118 - Chrome on iPhone (WebKit): Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.051916
+  type: 'test'
+  ...
+# Subtest: Firefox on iPhone (WebKit): Safari's engine on an Apple platform
+ok 119 - Firefox on iPhone (WebKit): Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.080375
+  type: 'test'
+  ...
+# Subtest: Safari told to send Chrome's user agent: Safari's engine on an Apple platform
+ok 120 - Safari told to send Chrome's user agent: Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.025292
+  type: 'test'
+  ...
+# Subtest: no vendor, Safari's user agent: Safari's engine on an Apple platform
+ok 121 - no vendor, Safari's user agent: Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.200375
+  type: 'test'
+  ...
+# Subtest: Chrome on macOS: not Safari's engine on an Apple platform
+ok 122 - Chrome on macOS: not Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.21425
+  type: 'test'
+  ...
+# Subtest: Playwright Chromium (headless) on macOS: not Safari's engine on an Apple platform
+ok 123 - Playwright Chromium (headless) on macOS: not Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.029125
+  type: 'test'
+  ...
+# Subtest: Playwright Chromium (headless) on Linux: not Safari's engine on an Apple platform
+ok 124 - Playwright Chromium (headless) on Linux: not Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.699666
+  type: 'test'
+  ...
+# Subtest: Edge on macOS: not Safari's engine on an Apple platform
+ok 125 - Edge on macOS: not Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.076125
+  type: 'test'
+  ...
+# Subtest: Opera on macOS: not Safari's engine on an Apple platform
+ok 126 - Opera on macOS: not Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.029833
+  type: 'test'
+  ...
+# Subtest: Chrome emulating an iPhone: not Safari's engine on an Apple platform
+ok 127 - Chrome emulating an iPhone: not Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.019167
+  type: 'test'
+  ...
+# Subtest: Firefox on macOS: not Safari's engine on an Apple platform
+ok 128 - Firefox on macOS: not Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.021708
+  type: 'test'
+  ...
+# Subtest: WebKit on Linux with its own user agent: not Safari's engine on an Apple platform
+ok 129 - WebKit on Linux with its own user agent: not Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.018083
+  type: 'test'
+  ...
+# Subtest: Chrome on Windows: not Safari's engine on an Apple platform
+ok 130 - Chrome on Windows: not Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.017834
+  type: 'test'
+  ...
+# Subtest: no navigator: not Safari's engine on an Apple platform
+ok 131 - no navigator: not Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.01675
+  type: 'test'
+  ...
+# Subtest: an empty navigator: not Safari's engine on an Apple platform
+ok 132 - an empty navigator: not Safari's engine on an Apple platform
+  ---
+  duration_ms: 0.020791
+  type: 'test'
+  ...
+# Subtest: a browser that claims to be Chromium-based without its userAgentData keeps Previews embedded, in a secure context
+ok 133 - a browser that claims to be Chromium-based without its userAgentData keeps Previews embedded, in a secure context
+  ---
+  duration_ms: 0.323541
+  type: 'test'
+  ...
+# Subtest: only a page on a subdomain of localhost counts as a Preview's address
+ok 134 - only a page on a subdomain of localhost counts as a Preview's address
+  ---
+  duration_ms: 0.163
+  type: 'test'
+  ...
+# Subtest: in Chromium the guard installs nothing
+ok 135 - in Chromium the guard installs nothing
+  ---
+  duration_ms: 0.394334
+  type: 'test'
+  ...
+# Subtest: in a browser that claims to be Chromium-based without being one, the guard refuses a Preview's address
+ok 136 - in a browser that claims to be Chromium-based without being one, the guard refuses a Preview's address
+  ---
+  duration_ms: 0.091917
+  type: 'test'
+  ...
+# Subtest: in Safari the guard refuses links and window.open to a Preview's address, and nothing else
+ok 137 - in Safari the guard refuses links and window.open to a Preview's address, and nothing else
+  ---
+  duration_ms: 0.334125
+  type: 'test'
+  ...
+# Subtest: picker references exclude transient classes and still identify the clicked element after Add to chat
+ok 138 - picker references exclude transient classes and still identify the clicked element after Add to chat
+  ---
+  duration_ms: 2984.29125
+  type: 'test'
+  ...
+# Subtest: the visible Inspect element button uses the component current URL and blocks external pages
+ok 139 - the visible Inspect element button uses the component current URL and blocks external pages
+  ---
+  duration_ms: 370.191458
+  type: 'test'
+  ...
+# Subtest: a Preview of the workbench's own port number opens the Session app under either loopback name
+ok 140 - a Preview of the workbench's own port number opens the Session app under either loopback name
+  ---
+  duration_ms: 287.338875
+  type: 'test'
+  ...
+# Subtest: Preview fills its body with a floating element inspector (light, 1280px)
+ok 141 - Preview fills its body with a floating element inspector (light, 1280px)
+  ---
+  duration_ms: 280.694417
+  type: 'test'
+  ...
+# Subtest: Preview fills its body with a floating element inspector (dark, 390px)
+ok 142 - Preview fills its body with a floating element inspector (dark, 390px)
+  ---
+  duration_ms: 285.8655
+  type: 'test'
+  ...
+# Subtest: GET /api/readiness names a missing Podman (no machine on macOS, not installed on Linux) and a refused Ollama version
+ok 143 - GET /api/readiness names a missing Podman (no machine on macOS, not installed on Linux) and a refused Ollama version
+  ---
+  duration_ms: 926.482459
+  type: 'test'
+  ...
+# Subtest: a Mac without Podman gets the install fix for this Mac
+ok 144 - a Mac without Podman gets the install fix for this Mac
+  ---
+  duration_ms: 700.104
+  type: 'test'
+  ...
+# Subtest: chromium: the first screen lists what is left, with the exact commands, and blocks Create session
+ok 145 - chromium: the first screen lists what is left, with the exact commands, and blocks Create session
+  ---
+  duration_ms: 1252.543333
+  type: 'test'
+  ...
+# Subtest: chromium: Create session waits for the picker's readiness read, and typing a name does not enable a blocked one
+ok 146 - chromium: Create session waits for the picker's readiness read, and typing a name does not enable a blocked one
+  ---
+  duration_ms: 11157.482959
+  type: 'test'
+  ...
+# Subtest: webkit: the first screen lists what is left, with the exact commands, and blocks Create session
+ok 147 - webkit: the first screen lists what is left, with the exact commands, and blocks Create session
+  ---
+  duration_ms: 1340.36825
+  type: 'test'
+  ...
+# Subtest: webkit: Create session waits for the picker's readiness read, and typing a name does not enable a blocked one
+ok 148 - webkit: Create session waits for the picker's readiness read, and typing a name does not enable a blocked one
+  ---
+  duration_ms: 11102.36225
+  type: 'test'
+  ...
+# Subtest: the run outcome panel shows every part of an Outcome, missing adjudications in red and clean-build failures as such
+ok 149 - the run outcome panel shows every part of an Outcome, missing adjudications in red and clean-build failures as such
+  ---
+  duration_ms: 2368.307709
+  type: 'test'
+  ...
+# Subtest: the panel renders why something was not covered exactly as NotCovered::reason does
+ok 150 - the panel renders why something was not covered exactly as NotCovered::reason does
+  ---
+  duration_ms: 275.972791
+  type: 'test'
+  ...
+# Subtest: the panel shows a cost the run does not know as what was reserved, never as a price
+ok 151 - the panel shows a cost the run does not know as what was reserved, never as a price
+  ---
+  duration_ms: 228.812833
+  type: 'test'
+  ...
+# Subtest: receipt verification wording preserves judged and fallback file-source distinctions
+ok 152 - receipt verification wording preserves judged and fallback file-source distinctions
+  ---
+  duration_ms: 334.0925
+  type: 'test'
+  ...
+# Subtest: a run without a receipt says why: the signing failure, or an older run
+ok 153 - a run without a receipt says why: the signing failure, or an older run
+  ---
+  duration_ms: 354.867167
+  type: 'test'
+  ...
+# Subtest: the panel says when the run cannot be read and while it is still running
+ok 154 - the panel says when the run cannot be read and while it is still running
+  ---
+  duration_ms: 223.267333
+  type: 'test'
+  ...
+# Subtest: Once context is consumed on durable acceptance while Session context reaches the next turn
+ok 155 - Once context is consumed on durable acceptance while Session context reaches the next turn
+  ---
+  duration_ms: 4742.899042
+  type: 'test'
+  ...
+# Subtest: Stop targets the exact turn, reloads durable safe-boundary evidence, and leaves a clean next send
+ok 156 - Stop targets the exact turn, reloads durable safe-boundary evidence, and leaves a clean next send
+  ---
+  duration_ms: 1011.948834
+  type: 'test'
+  ...
+# Subtest: terminal resync clears stale xterm state and exact identity changes cancel retries
+ok 157 - terminal resync clears stale xterm state and exact identity changes cancel retries
+  ---
+  duration_ms: 1414.457333
+  type: 'test'
+  ...
+# Subtest: a terminal destroyed while xterm.js still has work queued throws no page error
+ok 158 - a terminal destroyed while xterm.js still has work queued throws no page error
+  ---
+  duration_ms: 1576.185833
+  type: 'test'
+  ...
+# Subtest: History searches and exports the durable ledger, then Rewind restores transcript and composer without touching the workspace
+ok 159 - History searches and exports the durable ledger, then Rewind restores transcript and composer without touching the workspace
+  ---
+  duration_ms: 1225.982084
+  type: 'test'
+  ...
+# Subtest: current authority review preserves totals and applies exact preview before revocation
+ok 160 - current authority review preserves totals and applies exact preview before revocation
+  ---
+  duration_ms: 2478.035208
+  type: 'test'
+  ...
+# Subtest: lost authority Apply resolves original request after reload
+ok 161 - lost authority Apply resolves original request after reload
+  ---
+  duration_ms: 571.827916
+  type: 'test'
+  ...
+# Subtest: normal Finish permission reflects retained authority and sends the exact delegated wire operation
+ok 162 - normal Finish permission reflects retained authority and sends the exact delegated wire operation
+  ---
+  duration_ms: 524.162875
+  type: 'test'
+  ...
+# Subtest: authority review has an opaque theme surface and Escape stays within the nested dialog
+ok 163 - authority review has an opaque theme surface and Escape stays within the nested dialog
+  ---
+  duration_ms: 364.348084
+  type: 'test'
+  ...
+# Subtest: current-turn inspector add uses exact typed review and explicit limits
+ok 164 - current-turn inspector add uses exact typed review and explicit limits
+  ---
+  duration_ms: 2422.36825
+  type: 'test'
+  ...
+# Subtest: current-turn inspector replace uses exact typed review and explicit limits
+ok 165 - current-turn inspector replace uses exact typed review and explicit limits
+  ---
+  duration_ms: 513.76375
+  type: 'test'
+  ...
+# Subtest: graph Apply lost reply remains reachable after reload into NeedsAttention
+ok 166 - graph Apply lost reply remains reachable after reload into NeedsAttention
+  ---
+  duration_ms: 610.204417
+  type: 'test'
+  ...
+# Subtest: added work starts from the Session team's Agent and keeps what it may change
+ok 167 - added work starts from the Session team's Agent and keeps what it may change
+  ---
+  duration_ms: 384.000709
+  type: 'test'
+  ...
+# Subtest: stream invalidations coalesce with one trailing read and no response feedback loop
+ok 168 - stream invalidations coalesce with one trailing read and no response feedback loop
+  ---
+  duration_ms: 2627.053625
+  type: 'test'
+  ...
+# Subtest: composer guidance targets one exact generation and never silently follows its replacement
+ok 169 - composer guidance targets one exact generation and never silently follows its replacement
+  ---
+  duration_ms: 330.330458
+  type: 'test'
+  ...
+# Subtest: NeedsAttention exposes exact turn controls and does not send another message as work
+ok 170 - NeedsAttention exposes exact turn controls and does not send another message as work
+  ---
+  duration_ms: 256.837541
+  type: 'test'
+  ...
+# Subtest: canonical completion hides stale live guidance without a final stream frame
+ok 171 - canonical completion hides stale live guidance without a final stream frame
+  ---
+  duration_ms: 218.744625
+  type: 'test'
+  ...
+# Subtest: lost guidance reply survives reload and checks the exact original command
+ok 172 - lost guidance reply survives reload and checks the exact original command
+  ---
+  duration_ms: 264.08825
+  type: 'test'
+  ...
+# Subtest: a stale command refusal preserves editable guidance without creating an uncertain retry
+ok 173 - a stale command refusal preserves editable guidance without creating an uncertain retry
+  ---
+  duration_ms: 202.505291
+  type: 'test'
+  ...
+# Subtest: same composer guidance preserves typed selected references and attachment IDs
+ok 174 - same composer guidance preserves typed selected references and attachment IDs
+  ---
+  duration_ms: 209.354292
+  type: 'test'
+  ...
+# Subtest: a message while the turn needs attention offers continuing it or finishing it and sending a new request
+ok 175 - a message while the turn needs attention offers continuing it or finishing it and sending a new request
+  ---
+  duration_ms: 331.907542
+  type: 'test'
+  ...
+# Subtest: with no accepted answer, continuing with the message is unavailable and the finish text says what is lost
+ok 176 - with no accepted answer, continuing with the message is unavailable and the finish text says what is lost
+  ---
+  duration_ms: 258.452834
+  type: 'test'
+  ...
+# Subtest: the shell sends the finished turn's message as a new request only once History shows the turn closed
+ok 177 - the shell sends the finished turn's message as a new request only once History shows the turn closed
+  ---
+  duration_ms: 195.866375
+  type: 'test'
+  ...
+# Subtest: Knowledge HTTP preserves workspace ownership, exact revisions and immutable chat attachment bytes
+ok 178 - Knowledge HTTP preserves workspace ownership, exact revisions and immutable chat attachment bytes
+  ---
+  duration_ms: 7000.397584
+  type: 'test'
+  ...
+# Subtest: visible Session Knowledge creates a note and attaches its exact revision without starting work
+ok 179 - visible Session Knowledge creates a note and attaches its exact revision without starting work
+  ---
+  duration_ms: 1076.65875
+  type: 'test'
+  ...
+# Subtest: Knowledge offers New note and Import Markdown only once its view is read
+ok 180 - Knowledge offers New note and Import Markdown only once its view is read
+  ---
+  duration_ms: 638.755208
+  type: 'test'
+  ...
+# Subtest: Knowledge light: edit exact revisions and preserve typed sources
+ok 181 - Knowledge light: edit exact revisions and preserve typed sources
+  ---
+  duration_ms: 2681.414875
+  type: 'test'
+  ...
+# Subtest: Knowledge dark: edit exact revisions and preserve typed sources
+ok 182 - Knowledge dark: edit exact revisions and preserve typed sources
+  ---
+  duration_ms: 663.557
+  type: 'test'
+  ...
+# Subtest: Knowledge dark narrow: edit exact revisions and preserve typed sources
+ok 183 - Knowledge dark narrow: edit exact revisions and preserve typed sources
+  ---
+  duration_ms: 540.769125
+  type: 'test'
+  ...
+# Subtest: Knowledge graph, backlinks, code search and exact source navigation remain in the Session
+ok 184 - Knowledge graph, backlinks, code search and exact source navigation remain in the Session
+  ---
+  duration_ms: 904.464084
+  type: 'test'
+  ...
+# Subtest: Knowledge attachments capture selected revision and investigation prepares an editable prompt
+ok 185 - Knowledge attachments capture selected revision and investigation prepares an editable prompt
+  ---
+  duration_ms: 426.173042
+  type: 'test'
+  ...
+# Subtest: Knowledge proposal decisions preserve expected revision and never imply acceptance on conflict
+ok 186 - Knowledge proposal decisions preserve expected revision and never imply acceptance on conflict
+  ---
+  duration_ms: 344.759167
+  type: 'test'
+  ...
+# Subtest: Knowledge supports explicit rejection and save conflicts retain draft bytes
+ok 187 - Knowledge supports explicit rejection and save conflicts retain draft bytes
+  ---
+  duration_ms: 646.501792
+  type: 'test'
+  ...
+# Subtest: Knowledge errors are distinct from an empty workspace and Session change clears old state
+ok 188 - Knowledge errors are distinct from an empty workspace and Session change clears old state
+  ---
+  duration_ms: 661.733375
+  type: 'test'
+  ...
+# Subtest: Markdown import validates a selected file and previews the exact current revision before Save
+ok 189 - Markdown import validates a selected file and previews the exact current revision before Save
+  ---
+  duration_ms: 317.387583
+  type: 'test'
+  ...
+# Subtest: Knowledge loads without the graph bundle and ignores a late graph load after leaving its tab
+ok 190 - Knowledge loads without the graph bundle and ignores a late graph load after leaving its tab
+  ---
+  duration_ms: 373.691125
+  type: 'test'
+  ...
+# Subtest: native composer uses approved Session models after Apply (light)
+ok 191 - native composer uses approved Session models after Apply (light)
+  ---
+  duration_ms: 2438.809291
+  type: 'test'
+  ...
+# Subtest: native composer uses approved Session models after Apply (dark)
+ok 192 - native composer uses approved Session models after Apply (dark)
+  ---
+  duration_ms: 302.410791
+  type: 'test'
+  ...
+# Subtest: native multi-Agent target follows Session slots and does not replace a selected execution graph
+ok 193 - native multi-Agent target follows Session slots and does not replace a selected execution graph
+  ---
+  duration_ms: 216.566709
+  type: 'test'
+  ...
+# Subtest: late legacy discovery cannot overwrite native approval; legacy overrides stay available
+ok 194 - late legacy discovery cannot overwrite native approval; legacy overrides stay available
+  ---
+  duration_ms: 203.015916
+  type: 'test'
+  ...
+# Subtest: chromium: a new Session's limits come filled in and apply without typing
+ok 195 - chromium: a new Session's limits come filled in and apply without typing
+  ---
+  duration_ms: 2338.090542
+  type: 'test'
+  ...
+# Subtest: chromium: Preview names the minimum a turn needs, and an expiry past a year is refused
+ok 196 - chromium: Preview names the minimum a turn needs, and an expiry past a year is refused
+  ---
+  duration_ms: 831.878958
+  type: 'test'
+  ...
+# Subtest: webkit: a new Session's limits come filled in and apply without typing
+ok 197 - webkit: a new Session's limits come filled in and apply without typing
+  ---
+  duration_ms: 869.44375
+  type: 'test'
+  ...
+# Subtest: webkit: Preview names the minimum a turn needs, and an expiry past a year is refused
+ok 198 - webkit: Preview names the minimum a turn needs, and an expiry past a year is refused
+  ---
+  duration_ms: 840.748
+  type: 'test'
+  ...
+# Subtest: until a native Session team is applied, Send reads Set budget and opens Team and budget
+ok 199 - until a native Session team is applied, Send reads Set budget and opens Team and budget
+  ---
+  duration_ms: 1024.551458
+  type: 'test'
+  ...
+# Subtest: chromium: a Team whose budget expired is applied again through Edit, Preview and Apply
+ok 200 - chromium: a Team whose budget expired is applied again through Edit, Preview and Apply
+  ---
+  duration_ms: 19235.913041
+  type: 'test'
+  ...
+# Subtest: webkit: a Team whose budget expired is applied again through Edit, Preview and Apply
+ok 201 - webkit: a Team whose budget expired is applied again through Edit, Preview and Apply
+  ---
+  duration_ms: 19146.416417
+  type: 'test'
+  ...
+# Subtest: actual Session team routes authenticate whole-graph Apply, retain exact retries and leave Cancel unchanged
+ok 202 - actual Session team routes authenticate whole-graph Apply, retain exact retries and leave Cancel unchanged
+  ---
+  duration_ms: 6522.901458
+  type: 'test'
+  ...
+# Subtest: native Team preview rejects unsupported repository tools before provider observation
+ok 203 - native Team preview rejects unsupported repository tools before provider observation
+  ---
+  duration_ms: 6419.698125
+  type: 'test'
+  ...
+# Subtest: actual Session team carries what each Agent may change into its reviewed profile
+ok 204 - actual Session team carries what each Agent may change into its reviewed profile
+  ---
+  duration_ms: 529.369459
+  type: 'test'
+  ...
+# Subtest: a Team edit that leaves writes out keeps the template's read-only scope
+ok 205 - a Team edit that leaves writes out keeps the template's read-only scope
+  ---
+  duration_ms: 6725.539959
+  type: 'test'
+  ...
+# Subtest: actual Session team offers the detected check without enabling it and refuses checks nobody can pay for
+ok 206 - actual Session team offers the detected check without enabling it and refuses checks nobody can pay for
+  ---
+  duration_ms: 128.418292
+  type: 'test'
+  ...
+# Subtest: actual Session team with a bash Agent applies required checks and reports them for the next edit
+ok 207 - actual Session team with a bash Agent applies required checks and reports them for the next edit
+  ---
+  duration_ms: 6502.413125
+  type: 'test'
+  ...
+# Subtest: a new Session offers the read-only Worker templates as helpers without approving them; it works alone unless the person approves their limits
+ok 208 - a new Session offers the read-only Worker templates as helpers without approving them; it works alone unless the person approves their limits
+  ---
+  duration_ms: 21158.071792
+  type: 'test'
+  ...
+# Subtest: actual Session team applies a required review only with a read-only Worker whose budget covers every round
+ok 209 - actual Session team applies a required review only with a read-only Worker whose budget covers every round
+  ---
+  duration_ms: 6818.929292
+  type: 'test'
+  ...
+# Subtest: Team and budget light: the same-model warning sits beside the reviewer picker before Apply
+ok 210 - Team and budget light: the same-model warning sits beside the reviewer picker before Apply
+  ---
+  duration_ms: 3201.958875
+  type: 'test'
+  ...
+# Subtest: Team and budget dark: the same-model warning sits beside the reviewer picker before Apply
+ok 211 - Team and budget dark: the same-model warning sits beside the reviewer picker before Apply
+  ---
+  duration_ms: 512.761833
+  type: 'test'
+  ...
+# Subtest: Team and budget: no warning for a reviewer on another model, and the preview carries the daemon's own
+ok 212 - Team and budget: no warning for a reviewer on another model, and the preview carries the daemon's own
+  ---
+  duration_ms: 575.756459
+  type: 'test'
+  ...
+# Subtest: Session team light: explicit budgets, typed review and future Apply
+ok 213 - Session team light: explicit budgets, typed review and future Apply
+  ---
+  duration_ms: 2601.651459
+  type: 'test'
+  ...
+# Subtest: Session team dark: explicit budgets, typed review and future Apply
+ok 214 - Session team dark: explicit budgets, typed review and future Apply
+  ---
+  duration_ms: 605.002916
+  type: 'test'
+  ...
+# Subtest: Session team draft Lattice copy/undo and Cancel never apply
+ok 215 - Session team draft Lattice copy/undo and Cancel never apply
+  ---
+  duration_ms: 589.489
+  type: 'test'
+  ...
+# Subtest: Session team stale Apply permits refresh
+ok 216 - Session team stale Apply permits refresh
+  ---
+  duration_ms: 495.693917
+  type: 'test'
+  ...
+# Subtest: Session team pointer connections survive field edits and reach whole-graph review
+ok 217 - Session team pointer connections survive field edits and reach whole-graph review
+  ---
+  duration_ms: 742.542958
+  type: 'test'
+  ...
+# Subtest: Session team lost Apply reply survives reload with exact retry
+ok 218 - Session team lost Apply reply survives reload with exact retry
+  ---
+  duration_ms: 711.451
+  type: 'test'
+  ...
+# Subtest: Coordinator helper approval requires explicit helper limits and graph bounds
+ok 219 - Coordinator helper approval requires explicit helper limits and graph bounds
+  ---
+  duration_ms: 671.622458
+  type: 'test'
+  ...
+# Subtest: An Autonomous Agent may approve helpers and a Worker slot is not offered delegation
+ok 220 - An Autonomous Agent may approve helpers and a Worker slot is not offered delegation
+  ---
+  duration_ms: 870.572417
+  type: 'test'
+  ...
+# Subtest: Legacy Team read leaves its existing workflow available without offering native approval
+ok 221 - Legacy Team read leaves its existing workflow available without offering native approval
+  ---
+  duration_ms: 377.8165
+  type: 'test'
+  ...
+# Subtest: Changing the selected Agent template keeps its editable configuration visible
+ok 222 - Changing the selected Agent template keeps its editable configuration visible
+  ---
+  duration_ms: 443.519667
+  type: 'test'
+  ...
+# Subtest: Read-only toggle sends empty writes, and the review says what each Agent may change
+ok 223 - Read-only toggle sends empty writes, and the review says what each Agent may change
+  ---
+  duration_ms: 609.793083
+  type: 'test'
+  ...
+# Subtest: The review says an Agent with no tools can only answer from the conversation
+ok 224 - The review says an Agent with no tools can only answer from the conversation
+  ---
+  duration_ms: 824.423041
+  type: 'test'
+  ...
+# Subtest: The detected check is only offered: nothing runs it until the person adds it, and the review says what a failure means
+ok 225 - The detected check is only offered: nothing runs it until the person adds it, and the review says what a failure means
+  ---
+  duration_ms: 579.349042
+  type: 'test'
+  ...
+# Subtest: Checks the person did not edit keep their exact arguments; a changed line runs through sh
+ok 226 - Checks the person did not edit keep their exact arguments; a changed line runs through sh
+  ---
+  duration_ms: 422.932625
+  type: 'test'
+  ...
+# Subtest: A new Session offers its read-only helpers unselected; selecting delegation drafts them and the person enters their limits
+ok 227 - A new Session offers its read-only helpers unselected; selecting delegation drafts them and the person enters their limits
+  ---
+  duration_ms: 958.941375
+  type: 'test'
+  ...
+# Subtest: Add Agent adds the template chosen beside it
+ok 228 - Add Agent adds the template chosen beside it
+  ---
+  duration_ms: 407.64225
+  type: 'test'
+  ...
+# Subtest: On a real daemon, a new Session on the lead offers its read-only Worker helpers by name
+ok 229 - On a real daemon, a new Session on the lead offers its read-only Worker helpers by name
+  ---
+  duration_ms: 6941.982125
+  type: 'test'
+  ...
+# Subtest: A required review names a read-only Worker, its rounds and its budget, and the review says what it enforces
+ok 230 - A required review names a read-only Worker, its rounds and its budget, and the review says what it enforces
+  ---
+  duration_ms: 594.265333
+  type: 'test'
+  ...
+# Subtest: A saved required review is shown and kept exactly in the next edit
+ok 231 - A saved required review is shown and kept exactly in the next edit
+  ---
+  duration_ms: 360.135541
+  type: 'test'
+  ...
+# Subtest: A slot whose Agent lists web tools shows a web badge
+ok 232 - A slot whose Agent lists web tools shows a web badge
+  ---
+  duration_ms: 1155.50075
+  type: 'test'
+  ...
+# Subtest: Settings reads global actor status without polling reusable Worker templates
+ok 233 - Settings reads global actor status without polling reusable Worker templates
+  ---
+  duration_ms: 2274.98525
+  type: 'test'
+  ...
+# Subtest: only WebKit on Linux settles before a navigation
+ok 234 - only WebKit on Linux settles before a navigation
+  ---
+  duration_ms: 0.424917
+  type: 'test'
+  ...
+# Subtest: a reload waits until no request has been in flight for half a second
+ok 235 - a reload waits until no request has been in flight for half a second
+  ---
+  duration_ms: 0.639583
+  type: 'test'
+  ...
+# Subtest: a failed request ends too, and every navigation method waits
+ok 236 - a failed request ends too, and every navigation method waits
+  ---
+  duration_ms: 0.345166
+  type: 'test'
+  ...
+# Subtest: a request held past the bound does not stop the navigation
+ok 237 - a request held past the bound does not stop the navigation
+  ---
+  duration_ms: 0.374125
+  type: 'test'
+  ...
+# Subtest: a page that is not a daemon's navigates at once
+ok 238 - a page that is not a daemon's navigates at once
+  ---
+  duration_ms: 0.133833
+  type: 'test'
+  ...
+# Subtest: every page of WebKit on Linux settles, and no other
+ok 239 - every page of WebKit on Linux settles, and no other
+  ---
+  duration_ms: 1088.075
+  type: 'test'
+  ...
+# Subtest: chromium: while / serves the shell and every API request answers 401, the shell reloads once and then says it is signed out
+ok 240 - chromium: while / serves the shell and every API request answers 401, the shell reloads once and then says it is signed out
+  ---
+  duration_ms: 9621.645583
+  type: 'test'
+  ...
+# Subtest: chromium: the shell reloads on a 401 at most once a minute
+ok 241 - chromium: the shell reloads on a 401 at most once a minute
+  ---
+  duration_ms: 5635.867875
+  type: 'test'
+  ...
+# Subtest: chromium: the signed-out message closes an open modal dialog and stays on top
+ok 242 - chromium: the signed-out message closes an open modal dialog and stays on top
+  ---
+  duration_ms: 1008.086166
+  type: 'test'
+  ...
+# Subtest: chromium: a browser whose sign-in cookie is gone reloads once into the sign-in page
+ok 243 - chromium: a browser whose sign-in cookie is gone reloads once into the sign-in page
+  ---
+  duration_ms: 3433.813625
+  type: 'test'
+  ...
+# Subtest: chromium: without sessionStorage the shell never reloads on a 401 and says it is signed out
+ok 244 - chromium: without sessionStorage the shell never reloads on a 401 and says it is signed out
+  ---
+  duration_ms: 3849.7845
+  type: 'test'
+  ...
+# Subtest: chromium: cookies a top-level *.localhost page sets for Domain=localhost never reach the workbench
+ok 245 - chromium: cookies a top-level *.localhost page sets for Domain=localhost never reach the workbench
+  ---
+  duration_ms: 5833.150625
+  type: 'test'
+  ...
+# Subtest: chromium: the cookies a page on another 127.0.0.1 port sets with Path=/api sign WebKit on macOS out of the API, and the shell says so instead of reloading without end
+ok 246 - chromium: the cookies a page on another 127.0.0.1 port sets with Path=/api sign WebKit on macOS out of the API, and the shell says so instead of reloading without end
+  ---
+  duration_ms: 10895.608125
+  type: 'test'
+  ...
+# Subtest: chromium: the cookies a page on another 127.0.0.1 port sets with Path=/ sign WebKit on macOS out entirely, and the sign-in page says what to do
+ok 247 - chromium: the cookies a page on another 127.0.0.1 port sets with Path=/ sign WebKit on macOS out entirely, and the sign-in page says what to do
+  ---
+  duration_ms: 3668.692667
+  type: 'test'
+  ...
+# Subtest: chromium: when the live connection never opens and /ws answers 401, the shell checks /ws, reloads once and says it is signed out
+ok 248 - chromium: when the live connection never opens and /ws answers 401, the shell checks /ws, reloads once and says it is signed out
+  ---
+  duration_ms: 4129.561833
+  type: 'test'
+  ...
+# Subtest: chromium: the cookies a page on another 127.0.0.1 port sets with Path=/ws keep WebKit on macOS's live connection from opening, and the shell says it is signed out
+ok 249 - chromium: the cookies a page on another 127.0.0.1 port sets with Path=/ws keep WebKit on macOS's live connection from opening, and the shell says it is signed out
+  ---
+  duration_ms: 6498.2865
+  type: 'test'
+  ...
+# Subtest: webkit: while / serves the shell and every API request answers 401, the shell reloads once and then says it is signed out
+ok 250 - webkit: while / serves the shell and every API request answers 401, the shell reloads once and then says it is signed out
+  ---
+  duration_ms: 7553.412333
+  type: 'test'
+  ...
+# Subtest: webkit: the shell reloads on a 401 at most once a minute
+ok 251 - webkit: the shell reloads on a 401 at most once a minute
+  ---
+  duration_ms: 5461.492375
+  type: 'test'
+  ...
+# Subtest: webkit: the signed-out message closes an open modal dialog and stays on top
+ok 252 - webkit: the signed-out message closes an open modal dialog and stays on top
+  ---
+  duration_ms: 949.232083
+  type: 'test'
+  ...
+# Subtest: webkit: a browser whose sign-in cookie is gone reloads once into the sign-in page
+ok 253 - webkit: a browser whose sign-in cookie is gone reloads once into the sign-in page
+  ---
+  duration_ms: 3321.270708
+  type: 'test'
+  ...
+# Subtest: webkit: without sessionStorage the shell never reloads on a 401 and says it is signed out
+ok 254 - webkit: without sessionStorage the shell never reloads on a 401 and says it is signed out
+  ---
+  duration_ms: 3867.058875
+  type: 'test'
+  ...
+# Subtest: webkit: cookies a top-level *.localhost page sets for Domain=localhost never reach the workbench
+ok 255 - webkit: cookies a top-level *.localhost page sets for Domain=localhost never reach the workbench
+  ---
+  duration_ms: 5614.631625
+  type: 'test'
+  ...
+# Subtest: webkit: the cookies a page on another 127.0.0.1 port sets with Path=/api sign WebKit on macOS out of the API, and the shell says so instead of reloading without end
+ok 256 - webkit: the cookies a page on another 127.0.0.1 port sets with Path=/api sign WebKit on macOS out of the API, and the shell says so instead of reloading without end
+  ---
+  duration_ms: 10943.014125
+  type: 'test'
+  ...
+# Subtest: webkit: the cookies a page on another 127.0.0.1 port sets with Path=/ sign WebKit on macOS out entirely, and the sign-in page says what to do
+ok 257 - webkit: the cookies a page on another 127.0.0.1 port sets with Path=/ sign WebKit on macOS out entirely, and the sign-in page says what to do
+  ---
+  duration_ms: 3669.56825
+  type: 'test'
+  ...
+# Subtest: webkit: when the live connection never opens and /ws answers 401, the shell checks /ws, reloads once and says it is signed out
+ok 258 - webkit: when the live connection never opens and /ws answers 401, the shell checks /ws, reloads once and says it is signed out
+  ---
+  duration_ms: 4142.789667
+  type: 'test'
+  ...
+# Subtest: webkit: the cookies a page on another 127.0.0.1 port sets with Path=/ws keep WebKit on macOS's live connection from opening, and the shell says it is signed out
+ok 259 - webkit: the cookies a page on another 127.0.0.1 port sets with Path=/ws keep WebKit on macOS's live connection from opening, and the shell says it is signed out
+  ---
+  duration_ms: 6462.890583
+  type: 'test'
+  ...
+# Subtest: a Session-authorized Skill triggers a UI-created Automation whose result survives restart
+ok 260 - a Session-authorized Skill triggers a UI-created Automation whose result survives restart
+  ---
+  duration_ms: 7908.894667
+  type: 'test'
+  ...
+# Subtest: chromium: the commit box names the person a commit is by
+ok 261 - chromium: the commit box names the person a commit is by
+  ---
+  duration_ms: 2284.934333
+  type: 'test'
+  ...
+# Subtest: chromium: no Git identity disables Commit and says how to set one
+ok 262 - chromium: no Git identity disables Commit and says how to set one
+  ---
+  duration_ms: 613.892625
+  type: 'test'
+  ...
+# Subtest: chromium: a refused commit shows Git's message instead of Committed
+ok 263 - chromium: a refused commit shows Git's message instead of Committed
+  ---
+  duration_ms: 687.238458
+  type: 'test'
+  ...
+# Subtest: chromium: a folder that is not a repository is offered Initialize Git here
+ok 264 - chromium: a folder that is not a repository is offered Initialize Git here
+  ---
+  duration_ms: 731.466167
+  type: 'test'
+  ...
+# Subtest: chromium: Last turn says when the last turn's files are not known
+ok 265 - chromium: Last turn says when the last turn's files are not known
+  ---
+  duration_ms: 607.49525
+  type: 'test'
+  ...
+# Subtest: webkit: the commit box names the person a commit is by
+ok 266 - webkit: the commit box names the person a commit is by
+  ---
+  duration_ms: 684.913916
+  type: 'test'
+  ...
+# Subtest: webkit: no Git identity disables Commit and says how to set one
+ok 267 - webkit: no Git identity disables Commit and says how to set one
+  ---
+  duration_ms: 648.378083
+  type: 'test'
+  ...
+# Subtest: webkit: a refused commit shows Git's message instead of Committed
+ok 268 - webkit: a refused commit shows Git's message instead of Committed
+  ---
+  duration_ms: 724.426666
+  type: 'test'
+  ...
+# Subtest: webkit: a folder that is not a repository is offered Initialize Git here
+ok 269 - webkit: a folder that is not a repository is offered Initialize Git here
+  ---
+  duration_ms: 700.4825
+  type: 'test'
+  ...
+# Subtest: webkit: Last turn says when the last turn's files are not known
+ok 270 - webkit: Last turn says when the last turn's files are not known
+  ---
+  duration_ms: 641.502209
+  type: 'test'
+  ...
+# Subtest: closed Ways graph is expandable retained evidence without another Keep (light)
+ok 271 - closed Ways graph is expandable retained evidence without another Keep (light)
+  ---
+  duration_ms: 2265.770041
+  type: 'test'
+  ...
+# Subtest: closed Ways graph is expandable retained evidence without another Keep (dark)
+ok 272 - closed Ways graph is expandable retained evidence without another Keep (dark)
+  ---
+  duration_ms: 417.589083
+  type: 'test'
+  ...
+# Subtest: live Ways graph keys exact candidate requests and becomes read-only on closure
+ok 273 - live Ways graph keys exact candidate requests and becomes read-only on closure
+  ---
+  duration_ms: 507.815042
+  type: 'test'
+  ...
+# Subtest: a different live set cannot retarget an old graph or open comparison
+ok 274 - a different live set cannot retarget an old graph or open comparison
+  ---
+  duration_ms: 248.42725
+  type: 'test'
+  ...
+# Subtest: existing Attempts and Ways History expose exact graph navigation
+ok 275 - existing Attempts and Ways History expose exact graph navigation
+  ---
+  duration_ms: 409.441791
+  type: 'test'
+  ...
+# Subtest: Ways availability follows the applied native team without changing pre-Team single Agent behavior
+ok 276 - Ways availability follows the applied native team without changing pre-Team single Agent behavior
+  ---
+  duration_ms: 231.880875
+  type: 'test'
+  ...
+# Subtest: Ways storage preparation renders lifecycle and disables the actual composer Send control
+ok 277 - Ways storage preparation renders lifecycle and disables the actual composer Send control
+  ---
+  duration_ms: 252.867167
+  type: 'test'
+  ...
+# Subtest: Ways storage preflight cannot double-send or consume a changed composer draft
+ok 278 - Ways storage preflight cannot double-send or consume a changed composer draft
+  ---
+  duration_ms: 245.189834
+  type: 'test'
+  ...
+# Subtest: closed decision remains inspectable and attachable with unknown usage (light)
+ok 279 - closed decision remains inspectable and attachable with unknown usage (light)
+  ---
+  duration_ms: 2815.949666
+  type: 'test'
+  ...
+# Subtest: closed decision remains inspectable and attachable with unknown usage (dark)
+ok 280 - closed decision remains inspectable and attachable with unknown usage (dark)
+  ---
+  duration_ms: 438.269834
+  type: 'test'
+  ...
+# Subtest: storage requires explicit limits, preserves an Apply error, and retries the same values
+ok 281 - storage requires explicit limits, preserves an Apply error, and retries the same values
+  ---
+  duration_ms: 325.372292
+  type: 'test'
+  ...
+# Subtest: a reconnect snapshot preserves its already-owned cold runtime preparation request
+ok 282 - a reconnect snapshot preserves its already-owned cold runtime preparation request
+  ---
+  duration_ms: 2555.825708
+  type: 'test'
+  ...
+# Subtest: rail collapse, keyboard toggle, reload, and compact resizing preserve one reversible preference
+ok 283 - rail collapse, keyboard toggle, reload, and compact resizing preserve one reversible preference
+  ---
+  duration_ms: 2553.565375
+  type: 'test'
+  ...
+# Subtest: enabled composer controls inherit readable light and dark theme tokens
+ok 284 - enabled composer controls inherit readable light and dark theme tokens
+  ---
+  duration_ms: 961.767542
+  type: 'test'
+  ...
+# Subtest: workspace selector exposes every named Workspace while the rail lists only its Sessions
+ok 285 - workspace selector exposes every named Workspace while the rail lists only its Sessions
+  ---
+  duration_ms: 1649.910875
+  type: 'test'
+  ...
+# Subtest: the New Session picker keeps focus in Session name when agents and teams arrive together
+ok 286 - the New Session picker keeps focus in Session name when agents and teams arrive together
+  ---
+  duration_ms: 827.101416
+  type: 'test'
+  ...
+# Subtest: an AwaitingApproval Session blocks work and routes runtime tools to the exact setup decision
+ok 287 - an AwaitingApproval Session blocks work and routes runtime tools to the exact setup decision
+  ---
+  duration_ms: 1453.017708
+  type: 'test'
+  ...
+# Subtest: restored unresolved Ways keep primary runtime surfaces unbound
+ok 288 - restored unresolved Ways keep primary runtime surfaces unbound
+  ---
+  duration_ms: 4778.328208
+  type: 'test'
+  ...
+# Subtest: a stale task snapshot cannot repopulate runtime state after Ways takes ownership
+ok 289 - a stale task snapshot cannot repopulate runtime state after Ways takes ownership
+  ---
+  duration_ms: 672.365292
+  type: 'test'
+  ...
+# Subtest: Ways suspension cancels delayed primary reads and preserves dirty editor drafts
+ok 290 - Ways suspension cancels delayed primary reads and preserves dirty editor drafts
+  ---
+  duration_ms: 1119.571
+  type: 'test'
+  ...
+# Subtest: a theme change while Monaco loads leaves the editor its suggestions, code actions and code lenses
+ok 291 - a theme change while Monaco loads leaves the editor its suggestions, code actions and code lenses
+  ---
+  duration_ms: 922.880833
+  type: 'test'
+  ...
+# Subtest: Quick Open stops a directory-only cycle at its explicit depth bound
+ok 292 - Quick Open stops a directory-only cycle at its explicit depth bound
+  ---
+  duration_ms: 674.827958
+  type: 'test'
+  ...
+# Subtest: Source Control exposes a normal turn absolute write in Last turn
+ok 293 - Source Control exposes a normal turn absolute write in Last turn
+  ---
+  duration_ms: 616.170291
+  type: 'test'
+  ...
+# Subtest: Source Control opens a change in Monaco's diff editor, side by side and inline, and its Markdown hover is sanitized
+ok 294 - Source Control opens a change in Monaco's diff editor, side by side and inline, and its Markdown hover is sanitized
+  ---
+  duration_ms: 1550.166834
+  type: 'test'
+  ...
+# Subtest: a failed Session renders bounded, text-only durable setup evidence in the banner and review
+ok 295 - a failed Session renders bounded, text-only durable setup evidence in the banner and review
+  ---
+  duration_ms: 2472.765833
+  type: 'test'
+  ...
+# Subtest: a lazy terminal failure after a persisted Ready restart reconciles the exact Session to Failed
+ok 296 - a lazy terminal failure after a persisted Ready restart reconciles the exact Session to Failed
+  ---
+  duration_ms: 2548.146375
+  type: 'test'
+  ...
+# Subtest: successful lazy runtime preparation leaves Preparing without a reload
+ok 297 - successful lazy runtime preparation leaves Preparing without a reload
+  ---
+  duration_ms: 520.574375
+  type: 'test'
+  ...
+# Subtest: a superseded runtime activation cannot strand the next Session epoch
+ok 298 - a superseded runtime activation cannot strand the next Session epoch
+  ---
+  duration_ms: 532.30825
+  type: 'test'
+  ...
+# Subtest: a rejected environment rebuild suspends before teardown and restores the Ready runtime
+ok 299 - a rejected environment rebuild suspends before teardown and restores the Ready runtime
+  ---
+  duration_ms: 577.285
+  type: 'test'
+  ...
+# Subtest: a reconnect snapshot preserves a cross-tab runtime gate and detects a completed generation
+ok 300 - a reconnect snapshot preserves a cross-tab runtime gate and detects a completed generation
+  ---
+  duration_ms: 681.017458
+  type: 'test'
+  ...
+# Subtest: a cross-tab Keep settlement clears a judged comparison and restores the kept turn
+ok 301 - a cross-tab Keep settlement clears a judged comparison and restores the kept turn
+  ---
+  duration_ms: 580.04475
+  type: 'test'
+  ...
+# Subtest: cross-tab Close and Delete retire the visible Session instead of leaving a pending ghost
+ok 302 - cross-tab Close and Delete retire the visible Session instead of leaving a pending ghost
+  ---
+  duration_ms: 2449.514833
+  type: 'test'
+  ...
+# Subtest: turn, task-poll, and Preview failures all reconcile a stale Ready cockpit
+ok 303 - turn, task-poll, and Preview failures all reconcile a stale Ready cockpit
+  ---
+  duration_ms: 1436.946958
+  type: 'test'
+  ...
+# Subtest: Preview app code cannot cross from its dedicated origin into the workbench
+ok 304 - Preview app code cannot cross from its dedicated origin into the workbench
+  ---
+  duration_ms: 958.453625
+  type: 'test'
+  ...
+# Subtest: Preview browser contract keeps modules, app APIs, storage, forms, assets, encoding negotiation, and HMR working
+ok 305 - Preview browser contract keeps modules, app APIs, storage, forms, assets, encoding negotiation, and HMR working
+  ---
+  duration_ms: 5509.017
+  type: 'test'
+  ...
+# Subtest: in Safari no link, window.open or terminal link in the workbench opens a Preview top-level; elsewhere they open as before
+ok 306 - in Safari no link, window.open or terminal link in the workbench opens a Preview top-level; elsewhere they open as before
+  ---
+  duration_ms: 5550.038
+  type: 'test'
+  ...
+# dragstart on the link: ["dragstart",true]
+# Subtest: Compare keeps surviving checked paths readable when one lane review is unavailable
+ok 307 - Compare keeps surviving checked paths readable when one lane review is unavailable
+  ---
+  duration_ms: 9268.237417
+  type: 'test'
+  ...
+# Subtest: Closed unresolved Attempts mount read-only and route setup-free recovery without Reopen
+ok 308 - Closed unresolved Attempts mount read-only and route setup-free recovery without Reopen
+  ---
+  duration_ms: 1435.466458
+  type: 'test'
+  ...
+# Subtest: a cross-tab Close removes Ready runtime bindings until an explicit Reopen
+ok 309 - a cross-tab Close removes Ready runtime bindings until an explicit Reopen
+  ---
+  duration_ms: 633.590417
+  type: 'test'
+  ...
+# Subtest: malformed devcontainer repair can explicitly retain the configured E2B template
+ok 310 - malformed devcontainer repair can explicitly retain the configured E2B template
+  ---
+  duration_ms: 625.854
+  type: 'test'
+  ...
+# Subtest: Session creation hides coordinator-owned Workers and chooses a named Lattice team
+ok 311 - Session creation hides coordinator-owned Workers and chooses a named Lattice team
+  ---
+  duration_ms: 9820.624958
+  type: 'test'
+  ...
+# Subtest: Custom team picker blocks invalid coordination graphs before Session creation
+ok 312 - Custom team picker blocks invalid coordination graphs before Session creation
+  ---
+  duration_ms: 1378.488084
+  type: 'test'
+  ...
+# Subtest: Coordinator Sessions expose neither Ways nor rewind as autonomous-Agent actions
+ok 313 - Coordinator Sessions expose neither Ways nor rewind as autonomous-Agent actions
+  ---
+  duration_ms: 534.260791
+  type: 'test'
+  ...
+# Subtest: Ways preparation exposes only autonomous lane and planning Agents
+ok 314 - Ways preparation exposes only autonomous lane and planning Agents
+  ---
+  duration_ms: 947.991
+  type: 'test'
+  ...
+# Subtest: Coordinator run view makes every worker and Session terminal state explicit
+ok 315 - Coordinator run view makes every worker and Session terminal state explicit
+  ---
+  duration_ms: 543.770375
+  type: 'test'
+  ...
+# Subtest: Session History hydration preserves live frames that arrive while turns are in flight
+ok 316 - Session History hydration preserves live frames that arrive while turns are in flight
+  ---
+  duration_ms: 502.201583
+  type: 'test'
+  ...
+# Subtest: direct target graph restores only recorded membership from durable metadata on open and reconnect
+ok 317 - direct target graph restores only recorded membership from durable metadata on open and reconnect
+  ---
+  duration_ms: 571.741541
+  type: 'test'
+  ...
+# Subtest: direct targets stay isolated in the configured Agent graph
+ok 318 - direct targets stay isolated in the configured Agent graph
+  ---
+  duration_ms: 484.4615
+  type: 'test'
+  ...
+# Subtest: stale History response cannot resurrect a prior turn over a newer accepted turn
+ok 319 - stale History response cannot resurrect a prior turn over a newer accepted turn
+  ---
+  duration_ms: 498.996541
+  type: 'test'
+  ...
+# Subtest: active Session hydration orders authoritative HTTP state against newer socket state
+ok 320 - active Session hydration orders authoritative HTTP state against newer socket state
+  ---
+  duration_ms: 565.639625
+  type: 'test'
+  ...
+# Subtest: a rejected pending send cannot clear a different active Session turn
+ok 321 - a rejected pending send cannot clear a different active Session turn
+  ---
+  duration_ms: 402.470583
+  type: 'test'
+  ...
+# Subtest: a nonterminal request rejection preserves its same-turn live Session owner and evidence
+ok 322 - a nonterminal request rejection preserves its same-turn live Session owner and evidence
+  ---
+  duration_ms: 489.524125
+  type: 'test'
+  ...
+# Subtest: manual E2B cleanup confirmation requires the exact retained runtime affirmation
+ok 323 - manual E2B cleanup confirmation requires the exact retained runtime affirmation
+  ---
+  duration_ms: 967.456917
+  type: 'test'
+  ...
+# Subtest: E2B Close explains exact-runtime pause while local Close keeps its existing promise
+ok 324 - E2B Close explains exact-runtime pause while local Close keeps its existing promise
+  ---
+  duration_ms: 802.256417
+  type: 'test'
+  ...
+# Subtest: operator devcontainer policy is visible and reversible while package-lock setup stays unapproved
+ok 325 - operator devcontainer policy is visible and reversible while package-lock setup stays unapproved
+  ---
+  duration_ms: 3147.018
+  type: 'test'
+  ...
+# Subtest: refused No-Keep remains in review with its error and current Team and terminal Ways facts
+ok 326 - refused No-Keep remains in review with its error and current Team and terminal Ways facts
+  ---
+  duration_ms: 3990.723792
+  type: 'test'
+  ...
+# Subtest: chromium: the folder picker marks Git repositories and opening the home folder needs its typed name
+ok 327 - chromium: the folder picker marks Git repositories and opening the home folder needs its typed name
+  ---
+  duration_ms: 3078.943833
+  type: 'test'
+  ...
+# Subtest: chromium: Remove from list forgets a Workspace and refuses one with open Sessions
+ok 328 - chromium: Remove from list forgets a Workspace and refuses one with open Sessions
+  ---
+  duration_ms: 1155.322041
+  type: 'test'
+  ...
+# Subtest: chromium: New session for a Workspace the Session browser has not read yet opens once it is read
+ok 329 - chromium: New session for a Workspace the Session browser has not read yet opens once it is read
+  ---
+  duration_ms: 1003.417084
+  type: 'test'
+  ...
+# Subtest: webkit: the folder picker marks Git repositories and opening the home folder needs its typed name
+ok 330 - webkit: the folder picker marks Git repositories and opening the home folder needs its typed name
+  ---
+  duration_ms: 1489.753792
+  type: 'test'
+  ...
+# Subtest: webkit: Remove from list forgets a Workspace and refuses one with open Sessions
+ok 331 - webkit: Remove from list forgets a Workspace and refuses one with open Sessions
+  ---
+  duration_ms: 1122.708
+  type: 'test'
+  ...
+# Subtest: webkit: New session for a Workspace the Session browser has not read yet opens once it is read
+ok 332 - webkit: New session for a Workspace the Session browser has not read yet opens once it is read
+  ---
+  duration_ms: 978.68725
+  type: 'test'
+  ...
+1..332
+# tests 332
+# suites 0
+# pass 332
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 692364.368833
+
+Browser regressions (webkit): 43 files, 332 tests: 332 passed, 0 failed, 0 skipped.
+Browser regressions: PASS (no file rerun)
+
+added 375 packages in 3s
+Copy-paste check passed: 23 files, 69 shell blocks and copy buttons, 10 YAML snippets, validated with /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axo-gate-webkit.m9BgHx/axocoatl.
+Product browser gate: PASS (webkit, release build)

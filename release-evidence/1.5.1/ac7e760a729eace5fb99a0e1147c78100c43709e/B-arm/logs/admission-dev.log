@@ -1,0 +1,21 @@
+[2m2026-10-28T20:41:31.658596Z[0m [32m INFO[0m [2maxocoatl_daemon::ipc[0m[2m:[0m IPC server listening [3mpath[0m[2m=[0m/tmp/axo-adm.vDhbCk/.axocoatl/run/axocoatl.sock
+Axocoatl dev mode
+  Config: /tmp/axo-adm.vDhbCk/Library/Application Support/Axocoatl/config.yaml
+  Agents: 0
+[2m2026-10-28T20:41:32.214433Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m Ollama provider configured (per-agent models) [3mbase_url[0m[2m=[0mhttp://127.0.0.1:49219
+[2m2026-10-28T20:41:32.222955Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m seeded automation store from legacy YAML sections [3mautomations[0m[2m=[0m0
+[2m2026-10-28T20:41:32.223022Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m Axocoatl daemon bootstrapped [3magents[0m[2m=[0m0
+[2m2026-10-28T20:41:32.223324Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m recovered canonical Session history without replaying execution [3msessions[0m[2m=[0m0
+  Runtime: 0 agents spawned
+  IPC:    /tmp/axo-adm.vDhbCk/.axocoatl/run/axocoatl.sock
+  Server: http://127.0.0.1:8200
+  Health: http://127.0.0.1:8200/health
+  Sign in: run `axocoatl url --config '/tmp/axo-adm.vDhbCk/Library/Application Support/Axocoatl/config.yaml'` for the browser sign-in link
+
+Axocoatl is running. Press Ctrl+C to stop.
+[2m2026-10-28T20:41:32.229454Z[0m [32m INFO[0m [2maxocoatl_server[0m[2m:[0m Axocoatl local API requires the per-daemon token; run `axocoatl url` for the sign-in link [3mhost[0m[2m=[0m"127.0.0.1"
+[2m2026-10-28T20:41:32.229538Z[0m [32m INFO[0m [2maxocoatl_server[0m[2m:[0m Starting Axocoatl API server [3maddr[0m[2m=[0m127.0.0.1:8200
+[2m2026-10-28T20:41:33.171163Z[0m [32m INFO[0m [2maxocoatl_llm_ollama::native::contract_probe[0m[2m:[0m native Ollama contract probes passed [3mmodel[0m[2m=[0m"qwen3-coder:30b" [3mserver_version[0m[2m=[0m0.40.6 [3mcontext[0m[2m=[0m32768 [3mtools[0m[2m=[0mtrue
+[2m2026-10-28T20:41:33.197279Z[0m [32m INFO[0m [2maxocoatl_llm_ollama::native::contract_probe[0m[2m:[0m native Ollama contract probes passed [3mmodel[0m[2m=[0m"gpt-oss:20b" [3mserver_version[0m[2m=[0m0.40.6 [3mcontext[0m[2m=[0m32768 [3mtools[0m[2m=[0mtrue
+[2m2026-10-28T20:41:33.366837Z[0m [32m INFO[0m [2maxocoatl_isolation::podman[0m[2m:[0m starting the podman machine [3mmachine[0m[2m=[0m"default"
+[2m2026-10-28T20:41:38.606380Z[0m [33m WARN[0m [2maxocoatl_daemon::bootstrap::session_native_lifecycle[0m[2m:[0m a closed Session's runtime volumes were not all removed [3msession[0m[2m=[0mses-d69fdf9b-f89c-4fa0-8f27-5e9ce7eab5f3 [3merror[0m[2m=[0mOCI container execution failed: listing Podman volumes: podman stand-in (running): `podman volume ls --format {{.Name}}` is not available in Tier B

@@ -1,0 +1,122 @@
+== none
+== no-machine
+info --format json
+--version
+machine list --format json
+--version
+machine list --format json
+machine info --format json
+== stopped
+info --format json
+--version
+machine list --format json
+--version
+machine list --format json
+machine inspect podman-machine-default
+machine info --format json
+== running
+info --format json
+--version
+info --format json
+machine list --format json
+machine inspect podman-machine-default
+machine info --format json
+== rootful
+info --format json
+--version
+info --format json
+machine list --format json
+machine inspect podman-machine-default
+machine info --format json
+== podman6
+info --format json
+--version
+info --format json
+machine list --format json
+machine inspect podman-machine-default
+machine info --format json
+== plan none
+== plan no-machine
+info --format json
+--version
+machine list --format json
+--version
+machine list --format json
+machine info --format json
+== plan stopped
+info --format json
+--version
+machine list --format json
+--version
+machine list --format json
+machine inspect podman-machine-default
+machine info --format json
+== admission: axocoatl dev
+info --format json
+--version
+machine list --format json
+info --format json
+--version
+machine list --format json
+info --format json
+--version
+machine list --format json
+info --format json
+--version
+machine list --format json
+info --format json
+--version
+machine list --format json
+== admission: axocoatl run
+info --format {{.Host.Security.Rootless}}
+info --format json
+--version
+machine list --format json
+machine list --format json
+machine inspect podman-machine-default
+machine start
+info --format json
+info --format {{.Host.Security.Rootless}}
+info --format json
+info --format json
+ps -a --no-trunc --filter name=axo-ses- --format {{.ID}}	{{.Names}}
+volume rm axo-egr-ses-09512928-58e3-4d83-938e-d9b017dd4af6 axo-egi-ses-09512928-58e3-4d83-938e-d9b017dd4af6 axo-svc-ses-09512928-58e3-4d83-938e-d9b017dd4af6 axo-ca-ses-09512928-58e3-4d83-938e-d9b017dd4af6
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}
+volume ls --format {{.Name}}

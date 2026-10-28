@@ -1,0 +1,4 @@
+receipt of run run-d698e7ea-0794-4ae0-b722-1f0695a36815, verdict pass
+signature: valid, by trusted key cd86e66b2fcff979 (sha256:cd86e66b2fcff9792080b03c53801fa91c3174ca27da85ccd03cf8e58569223f)
+record: /tmp/axo-gate-record.AXMM7D/fixture-outputs/node-deps/run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)

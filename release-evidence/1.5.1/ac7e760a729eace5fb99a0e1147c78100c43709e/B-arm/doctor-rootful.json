@@ -1,0 +1,148 @@
+{
+  "ready": false,
+  "config": "/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.o7I9o2/doctor-rootful/Library/Application Support/Axocoatl/config.yaml",
+  "sections": {
+    "sandbox": [
+      {
+        "name": "Podman",
+        "status": "ok",
+        "detail": "Podman 5.8.2 ready (machine podman-machine-default: applehv, rootful, 6 CPUs / 8 GiB; kernel 6.12.9-200.fc42.aarch64), needed for every Session and every axocoatl run",
+        "fix": null
+      },
+      {
+        "name": "Podman version",
+        "status": "warn",
+        "detail": "Podman 5.8.2 has not been tested with Axocoatl on macOS yet (6.1 is)",
+        "fix": null
+      },
+      {
+        "name": "Rootless",
+        "status": "fail",
+        "detail": "Podman runs containers as root; every axocoatl run (fix, qa, audit) needs rootless Podman and stops with exit 5",
+        "fix": "podman machine stop && podman machine set --rootful=false && podman machine start (this also affects other tools that use this machine)"
+      },
+      {
+        "name": "Platform",
+        "status": "ok",
+        "detail": "macOS on Apple silicon, as the release gate verifies",
+        "fix": null
+      },
+      {
+        "name": "Sandbox network",
+        "status": "ok",
+        "detail": "Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)",
+        "fix": null
+      },
+      {
+        "name": "Sandbox workload",
+        "status": "ok",
+        "detail": "Sandbox workload: image (commands run as the image's own user)",
+        "fix": null
+      }
+    ],
+    "models": [
+      {
+        "name": "Ollama",
+        "status": "ok",
+        "detail": "Ollama 0.40.6 at http://127.0.0.1:49219, a version native Sessions accept",
+        "fix": null
+      },
+      {
+        "name": "Ollama",
+        "status": "ok",
+        "detail": "Ollama cloud models disabled at http://127.0.0.1:49219 (~/.ollama/server.json)",
+        "fix": null
+      }
+    ],
+    "writers": [
+      {
+        "name": "Claude Code",
+        "status": "ok",
+        "detail": "not set up (`axocoatl recipe build claude-code && axocoatl connect claude-code` sets it up, and leaves your configuration as it is)",
+        "fix": null
+      },
+      {
+        "name": "Codex",
+        "status": "ok",
+        "detail": "not set up (`axocoatl connect codex` sets it up, and leaves your configuration as it is)",
+        "fix": null
+      },
+      {
+        "name": "claude CLI",
+        "status": "ok",
+        "detail": "not found; needed only to sign in with `axocoatl connect claude-code`",
+        "fix": null
+      },
+      {
+        "name": "codex CLI",
+        "status": "ok",
+        "detail": "not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container",
+        "fix": null
+      },
+      {
+        "name": "gh",
+        "status": "warn",
+        "detail": "not signed in; `axocoatl run --keep pr` needs it",
+        "fix": "gh auth login"
+      }
+    ],
+    "daemon": [
+      {
+        "name": "Config",
+        "status": "ok",
+        "detail": "Config valid: /var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.o7I9o2/doctor-rootful/Library/Application Support/Axocoatl/config.yaml",
+        "fix": null
+      },
+      {
+        "name": "Data dir",
+        "status": "ok",
+        "detail": "Data dir writable: /var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.o7I9o2/doctor-rootful/Library/Application Support/Axocoatl/data",
+        "fix": null
+      },
+      {
+        "name": "Data dir ownership",
+        "status": "ok",
+        "detail": "Data dir ownership: recorded for this directory",
+        "fix": null
+      },
+      {
+        "name": "git",
+        "status": "ok",
+        "detail": "git 2.55.0 (the daemon runs git on your repositories)",
+        "fix": null
+      },
+      {
+        "name": "Daemon",
+        "status": "fail",
+        "detail": "no daemon can run here: the IPC socket path /var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.o7I9o2/doctor-rootful/.axocoatl/run/axocoatl.sock is too long: 110 bytes, and a Unix socket path may have at most 103 bytes on this system",
+        "fix": "Set AXOCOATL_SOCKET_PATH to a shorter absolute path, or use a shorter home directory (the path is $HOME/.axocoatl/run/axocoatl.sock), then start one: `axocoatl dev`, or `axocoatl service install` and `axocoatl service start`. The socket's directory must be one only you can write to (it is made if missing), and every axocoatl command must see the same AXOCOATL_SOCKET_PATH (`axocoatl service install` records it for the Always-On Service)"
+      },
+      {
+        "name": "Webhooks",
+        "status": "ok",
+        "detail": "none (no outbound event egress)",
+        "fix": null
+      }
+    ]
+  },
+  "ready_for": [
+    {
+      "command": "axocoatl run fix-claude-code",
+      "ok": false,
+      "detail": "not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`",
+      "set_up": false,
+      "required": false
+    },
+    {
+      "command": "axocoatl run fix-codex",
+      "ok": false,
+      "detail": "not set up: run `axocoatl connect codex`",
+      "set_up": false,
+      "required": false
+    }
+  ],
+  "steps_left": [
+    "Rootless: Podman runs containers as root; every axocoatl run (fix, qa, audit) needs rootless Podman and stops with exit 5: podman machine stop && podman machine set --rootful=false && podman machine start (this also affects other tools that use this machine)",
+    "Daemon: no daemon can run here: the IPC socket path /var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.o7I9o2/doctor-rootful/.axocoatl/run/axocoatl.sock is too long: 110 bytes, and a Unix socket path may have at most 103 bytes on this system: Set AXOCOATL_SOCKET_PATH to a shorter absolute path, or use a shorter home directory (the path is $HOME/.axocoatl/run/axocoatl.sock), then start one: `axocoatl dev`, or `axocoatl service install` and `axocoatl service start`. The socket's directory must be one only you can write to (it is made if missing), and every axocoatl command must see the same AXOCOATL_SOCKET_PATH (`axocoatl service install` records it for the Always-On Service)"
+  ]
+}

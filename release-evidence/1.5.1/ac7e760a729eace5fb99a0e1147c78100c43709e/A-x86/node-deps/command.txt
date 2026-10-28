@@ -1,0 +1,1 @@
+axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" --junit "$AXO_EVIDENCE/junit.xml" --record "$AXO_EVIDENCE/run.axorecord.jsonl" --receipt "$AXO_EVIDENCE/receipt.json"

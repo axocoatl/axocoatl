@@ -1,0 +1,39 @@
+gate: PASS  start without axocoatl or podman on PATH
+gate: PASS  scripted model server
+axocoatl-install: resolving latest release...
+axocoatl-install: downloading axocoatl-v1.5.1-x86_64-apple-darwin.tar.gz (v1.5.1)...
+axocoatl-install: checksum verified
+axocoatl-install: installed axocoatl v1.5.1 -> /var/folders/20/jp1_0n3n7kndh6rnbqb5344m0000gn/T//axo-gate-b.q98qQh/home/.local/bin/axocoatl
+axocoatl-install: ~/.local/bin is not on your PATH. For new terminals to find axocoatl, add this line to ~/.zprofile:
+
+    case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
+axocoatl-install: Podman, which every Session and run needs, is not on PATH or in /opt/homebrew/bin, /var/folders/20/jp1_0n3n7kndh6rnbqb5344m0000gn/T//axo-gate-b.q98qQh/locked-bin or /opt/podman/bin.
+axocoatl-install: onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do.
+
+Next:  /var/folders/20/jp1_0n3n7kndh6rnbqb5344m0000gn/T//axo-gate-b.q98qQh/home/.local/bin/axocoatl onboard      # set up a writer and a reviewer, and Podman where it can (else it says how); it asks first
+       /var/folders/20/jp1_0n3n7kndh6rnbqb5344m0000gn/T//axo-gate-b.q98qQh/home/.local/bin/axocoatl doctor       # check the sandbox, the models and the daemon
+       /var/folders/20/jp1_0n3n7kndh6rnbqb5344m0000gn/T//axo-gate-b.q98qQh/home/.local/bin/axocoatl dev          # start the daemon; leave it running
+gate: PASS  install with the published command (6.4s)
+gate: PASS  installed binary is where the installer said
+gate: PASS  a new shell finds axocoatl
+gate: PASS  axocoatl --version names 1.5.1
+gate: PASS  doctor --json, Podman none
+gate: PASS  doctor --json, Podman no-machine
+gate: PASS  doctor --json, Podman stopped
+gate: PASS  doctor --json, Podman running
+gate: PASS  doctor --json, Podman rootful
+gate: PASS  doctor --json, Podman podman6
+gate: PASS  onboard --plan, Podman none: asks or says what to do
+gate: PASS  onboard --plan, Podman none: changed nothing
+gate: PASS  onboard --plan, Podman no-machine: asks or says what to do
+gate: PASS  onboard --plan, Podman no-machine: changed nothing
+gate: PASS  onboard --plan, Podman stopped: asks or says what to do
+gate: PASS  onboard --plan, Podman stopped: changed nothing
+gate: PASS  doctor and --plan ran only read-only podman commands
+gate: RUN   a run with the stand-in's machine stopped (it ends at its first container command)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+axocoatl run: first local start could not prove containers exposing control-plane root '/private/tmp/axo-adm.EwR1LW/Library/Application Support/Axocoatl/data' absent: OCI container execution failed: listing legacy Axocoatl containers: podman stand-in (running): `podman ps -a --no-trunc --filter name=axo-ses- --format {{.ID}}	{{.Names}}` is not available in Tier B
+gate: FAIL  a run with the stand-in's machine stopped (it ends at its first container command): exit 5, expected 0: · checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment axocoatl run: first local start could not prove containers exposing control-plane root '/private/tmp/axo-adm.EwR1LW/Library/Application Support/Axocoatl/data' absent: OCI container execution failed: listing legacy Axocoatl containers: podman stand-in (running): `podman ps -a --no-trunc --filter name=axo-ses- --format {{.ID}}	{{.Names}}` is not available in Tier B 
+gate: PASS  a run's admission started the stopped machine (podman machine start)
+B-intel: PASS (20/21 steps passed)
+gate: evidence: /Users/runner/work/axocoatl/axocoatl/release-evidence/1.5.1/ac7e760a729eace5fb99a0e1147c78100c43709e/B-intel.json

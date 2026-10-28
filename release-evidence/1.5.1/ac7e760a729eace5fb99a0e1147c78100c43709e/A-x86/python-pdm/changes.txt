@@ -1,0 +1,13 @@
+ M pager/__init__.py
+diff --git a/pager/__init__.py b/pager/__init__.py
+index eb5ba11..b48226b 100644
+--- a/pager/__init__.py
++++ b/pager/__init__.py
+@@ -13,6 +13,6 @@ def paginate(records, size):
+     pages = []
+     for page in range(count):
+         start = page * size
+-        length = size if page < count - 1 else len(records) % size
++        length = size if page < count - 1 else len(records) - start
+         pages.append(records[start:start + length])
+     return pages
