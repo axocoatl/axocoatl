@@ -3,7 +3,10 @@ import { createServer } from 'node:http';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
 
-import { launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext, isWebKitLoadDiagnostic } from '../support/daemon.mjs';
+import {
+  launchTestDaemon, resolveChromiumExecutable, newAuthorizedContext, isWebKitLoadDiagnostic,
+  trackRequests, waitForNoRequestsInFlight,
+} from '../support/daemon.mjs';
 
 let runtime;
 let browser;
@@ -96,6 +99,7 @@ after(async () => {
 async function openSession(session) {
   const context = await newAuthorizedContext(browser, { viewport: { width: 1400, height: 900 } });
   const page = await context.newPage();
+  const requests = trackRequests(page);
   const browserErrors = [];
   page.on('pageerror', (error) => {
     if (!isWebKitLoadDiagnostic(error)) browserErrors.push(`pageerror: ${error.message}`);
@@ -122,7 +126,7 @@ async function openSession(session) {
     throw new Error(`the workbench did not load: ${JSON.stringify(seen)}\n`
       + `${browserErrors.join('\n')}\n${runtime.logs()}`, { cause: error });
   }
-  return { context, page, browserErrors };
+  return { context, page, browserErrors, requests };
 }
 
 async function openSettingsSection(page, name) {
@@ -134,7 +138,7 @@ async function openSettingsSection(page, name) {
 }
 
 test('a Session-authorized Skill triggers a UI-created Automation whose result survives restart', { timeout: 90_000 }, async () => {
-  const { context, page, browserErrors } = await openSession(runtime.fixtures.alpha.sessions[0]);
+  const { context, page, browserErrors, requests } = await openSession(runtime.fixtures.alpha.sessions[0]);
   try {
     // Create session waits for the picker's own readiness read, and stays
     // disabled when the daemon reports that no Session can run (Podman
@@ -266,12 +270,17 @@ test('a Session-authorized Skill triggers a UI-created Automation whose result s
       '✓agent · node completed',
     ]);
 
+    // This journey verifies persisted results after restart. Let the current
+    // document finish its reads before stopping its daemon, and let in-flight
+    // reconnect reads settle before reloading the document.
+    await waitForNoRequestsInFlight(requests, 'The workbench before daemon restart');
     await runtime.restart();
     const durableAutomations = await runtime.listAutomations();
     assert.ok(
       durableAutomations.some((automation) => automation.id === 'launch-proof-recorder'),
       `the restarted daemon must reload the persisted Automation: ${JSON.stringify(durableAutomations)}\n${runtime.logs()}`,
     );
+    await waitForNoRequestsInFlight(requests, 'The workbench before reloading the restarted daemon');
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction((sessionId) => {
       const rail = document.querySelector('ax-rail');

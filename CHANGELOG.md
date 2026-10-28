@@ -32,6 +32,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scope review and receipt claims to their actual contracts, describe context-limit
   failures, and align the README and search-facing copy with the sites.
 
+### Verification scope
+- Fresh human-operated Mac onboarding and provider sign-ins (`C1-local`,
+  `C1-claude-code`, `C1-codex`, `C1-openrouter`), the associated live service,
+  workbench, recovery and real-repository paths (`C1-service`,
+  `C1-workbench-webkit`, `C1-recovery`, `C1-real-repo`), and live-provider Linux
+  `D1` were not rerun for 1.5.1. Publication uses the documented founder
+  new-user-evidence exception: the available Mac is a shared workstation, and a
+  clean dedicated gate Mac with a person available for fresh sign-ins was not
+  available. Prior 1.5.0 evidence remains historical and does not establish fresh
+  1.5.1 onboarding. All automated release gates, including Linux installation
+  checks on the built archives and the real Mac WebKit + Podman browser gate,
+  remain required before publication.
+
 ## [1.5.0] - 2026-10-22
 
 ### Workbench first run
