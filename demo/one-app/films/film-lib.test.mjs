@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -56,10 +56,13 @@ test('source content digest is representation-independent and preserves recordin
 });
 
 test('versioned recordings require matching canonical media and provenance without replacing historical paths', async () => {
-  const {loadPortfolio, validatePortfolio, filmSourceDirectory} = await import('./film-lib.mjs');
+  const {loadPortfolio, validatePortfolio, filmSourceDirectory, filmsDir, repoRoot} = await import('./film-lib.mjs');
   const portfolio = loadPortfolio();
-  assert.equal(portfolio.recording_version, 'v1.5.0');
-  assert.match(filmSourceDirectory(portfolio, portfolio.films[0].slug), /\/source\/v1\.5\.0\/session-workbench$/);
+  const cliVersion = readFileSync(join(repoRoot, 'axocoatl-cli/Cargo.toml'), 'utf8')
+    .match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+  assert.match(cliVersion, /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/);
+  assert.equal(portfolio.recording_version, `v${cliVersion}`);
+  assert.equal(filmSourceDirectory(portfolio, portfolio.films[0].slug), join(filmsDir, 'source', `v${cliVersion}`, 'session-workbench'));
   for (const version of ['../v1.1.0', 'v1.1.0/extra', '1.1.0', 'v01.1.0']) {
     assert.throws(() => validatePortfolio({...portfolio, recording_version:version}), /recording_version/);
   }
