@@ -159,7 +159,7 @@ in `docs/CLAIMS.md` R11. They are no longer included by the homepage's optional 
 the repository-root `llms.txt` as the AI-readable product narrative at `/llms.txt`. The
 validator keeps that file aligned with the visible workbench story and rejects the retired
 runtime-first narrative. The deployment expects twelve product-film MP4/JPEG pairs in
-`assets/films/<recording_version>/`. The current unrecorded portfolio targets `v1.5.2`; each
+`assets/films/<recording_version>/`. The current unrecorded portfolio targets `v1.5.3`; each
 entry has the stable status `required`, which records an obligation, not acceptance.
 Acceptance requires the complete capture and evidence contract. Missing required media
 fails validation even outside strict mode, and ffprobe is required to verify the media,

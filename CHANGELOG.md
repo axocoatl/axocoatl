@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.5.2] - 2026-10-29
+## [1.5.3] - 2026-10-29
+
+### Release process
+- Build candidate platform archives and run their Linux installation checks
+  alongside the existing test, browser and site gates. Evidence approval still
+  precedes builds; all gates must pass before attestations, draft creation,
+  package publication or site deployment.
 
 ### Added
 - Signed receipts for finished native dashboard Session turns. Conversation and
@@ -36,12 +42,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sign-ins (`C1-local`, `C1-claude-code`, `C1-codex`, `C1-openrouter`), the full
   associated live service, workbench, recovery and real-repository gate paths
   (`C1-service`, `C1-workbench-webkit`, `C1-recovery`, `C1-real-repo`), and
-  live-provider Linux `D1` were not rerun as release-gate paths for 1.5.2.
+  live-provider Linux `D1` were not rerun as release-gate paths for 1.5.3.
   Publication uses the founder new-user-evidence exception for this explicitly
   selected scope. The 1.5.1 exception and older evidence remain historical;
-  they do not establish 1.5.2 onboarding. Automated publication gates remain
+  they do not establish 1.5.3 onboarding. Automated publication gates remain
   required by the release workflow. See
-  [the acceptance record](https://github.com/axocoatl/axocoatl/blob/v1.5.2/docs/RELEASE_1.5.2_ACCEPTANCE.md).
+  [the acceptance record](https://github.com/axocoatl/axocoatl/blob/v1.5.3/docs/RELEASE_1.5.3_ACCEPTANCE.md).
+
+## [1.5.2] - Unpublished candidate
+
+- The candidate tag is retained as failure evidence. Its Linux native gate
+  found three new receipt-cache test fixtures whose temporary signing-key
+  directory was group-writable under `umask 002`. Signing correctly refused
+  that directory. Version 1.5.3 corrects the fixture; the dashboard runtime
+  behavior is unchanged. No 1.5.2 release was published.
 
 ## [1.5.1] - 2026-10-28
 

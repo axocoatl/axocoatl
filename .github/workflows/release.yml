@@ -196,7 +196,8 @@ jobs:
   product-browser:
     # The legs ci.yml runs, on the release build as users get it: Chromium
     # on x86_64 and aarch64, and WebKit, the Safari engine, on x86_64 Linux
-    # and on macOS (docs/RELEASE_GATE.md). A failing leg blocks the build.
+    # and on macOS (docs/RELEASE_GATE.md). Every leg must pass before
+    # artifact attestation or publication, while candidate builds run in parallel.
     name: Release gate — embedded product browser (${{ matrix.leg }})
     runs-on: ${{ matrix.runner }}
     # ci.yml's Linux legs that passed took 16 to 32 minutes (the 30 CI runs
@@ -264,7 +265,9 @@ jobs:
 
   build:
     name: Build and prove ${{ matrix.target }}
-    needs: [test-gate, marketing-site, docs-site, product-browser, new-user-evidence]
+    # Start candidate builds after evidence admission, alongside the other gates.
+    # Nothing is attested, drafted or published until every gate passes.
+    needs: [new-user-evidence]
     permissions:
       actions: read
       contents: read
@@ -467,7 +470,9 @@ jobs:
 
   prove-artifacts:
     name: Prove complete uploaded artifact set
-    needs: build
+    # Attestation publishes provenance, so it waits for every release gate,
+    # including fresh Linux installs of the candidate archives.
+    needs: [build, test-gate, marketing-site, docs-site, product-browser, new-user-evidence, new-user-linux]
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -612,7 +617,7 @@ jobs:
 
   prepare-release:
     name: Create and verify GitHub draft
-    needs: [prove-artifacts, new-user-linux]
+    needs: [test-gate, marketing-site, docs-site, product-browser, new-user-evidence, prove-artifacts, new-user-linux]
     runs-on: ubuntu-24.04
     permissions:
       actions: read

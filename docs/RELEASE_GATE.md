@@ -243,12 +243,15 @@ step of its path.
 `release.yml` (on a `v*` tag) adds three things to the existing gates:
 
 1. **Release gate — new-user evidence** runs first, next to the product test
-   gate, and the build needs it, so nothing is built, drafted or published to
-   crates.io without it. It runs
+   gate, and candidate builds still need it. After evidence admission, builds
+   and Linux installation checks run alongside the product, browser and site
+   gates. Every gate, including those fresh Linux installation checks, must
+   pass before artifact attestation, a GitHub draft, crates.io publication
+   or site deployment. The evidence job runs
    `node scripts/release-gate/check-evidence.mjs --version X.Y.Z --tag-commit SHA`.
 2. **Release gate — new user (Linux)** runs Tier A again on the release
    workflow's own built archives (x86_64 on ubuntu-24.04, aarch64 on
-   ubuntu-24.04-arm), and the GitHub draft needs it.
+   ubuntu-24.04-arm). Artifact attestation and the GitHub draft both need it.
 3. **Reverify and publish GitHub Release** runs the evidence check again
    before it touches the release.
 
@@ -1263,7 +1266,8 @@ A place may still hold a pending marker (the string `pendingMarker` names
 in `sites/marketing/scripts/validate.mjs`) while its text is being written.
 `release.yml`'s marketing job runs `./scripts/verify-marketing-gate.sh
 source-bound`, whose release-bound validation refuses every file in that list
-that still holds a marker, and the build needs that job; a release-tag
+that still holds a marker. Artifact attestation and the GitHub draft need
+that job, and publication and deployment remain downstream; a release-tag
 marketing deploy runs the same check. CI on pull requests and
 `scripts/preflight.sh` run the portable mode, which does not look for
 markers, so a green CI does not mean no marker is left. Check it before

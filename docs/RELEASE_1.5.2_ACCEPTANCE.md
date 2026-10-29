@@ -1,5 +1,8 @@
 # 1.5.2 acceptance decision
 
+> Historical, unpublished candidate. The immutable `v1.5.2` tag is retained;
+> [1.5.3](RELEASE_1.5.3_ACCEPTANCE.md) carries the corrected release candidate.
+
 ## Maintainer instruction
 
 For the dashboard receipt correction, the maintainer explicitly selected actual

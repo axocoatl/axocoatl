@@ -635,7 +635,7 @@ mod tests {
     }
 
     fn signed(mut statement: Statement) -> Vec<u8> {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::private_tempdir_test_support::private_tempdir();
         let (key, _) = receipt_key::load_or_create(directory.path()).unwrap();
         statement.predicate.signer = key.public().signer();
         let (envelope, _) = receipt::sign_statement(key.key_pair(), &statement).unwrap();

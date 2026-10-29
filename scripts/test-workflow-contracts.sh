@@ -143,8 +143,19 @@ with_change refused 'an action using an undeclared input' \
 
 with_change refused 'a build that does not wait for the new-user evidence' \
   'build.needs is' \
-  "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(\"product-browser, new-user-evidence]\", \"product-browser]\") or abort(\"no anchor\"); File.write(p, s)'" \
+  "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(\"needs: [new-user-evidence]\", \"needs: []\") or abort(\"no anchor\"); File.write(p, s)'" \
   .github/workflows/release.yml
+
+# Each acceptance gate must independently block attestation and the first
+# release mutation; candidate builds may overlap the other gates.
+for release_job in prove-artifacts prepare-release; do
+  for release_gate in test-gate marketing-site docs-site product-browser new-user-evidence new-user-linux; do
+    with_change refused "$release_job missing $release_gate" \
+      "$release_job.needs is" \
+      "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(/(  $release_job:\\n.*?    needs: \\[)([^\\]]+)(\\])/m) { \$1 + \$2.split(\", \").reject { |gate| gate == \"$release_gate\" }.join(\", \") + \$3 } or abort(\"no anchor\"); File.write(p, s)'" \
+      .github/workflows/release.yml
+  done
+done
 
 with_change refused 'a publish job that no longer checks the new-user evidence' \
   'the release job must run node scripts/release-gate/check-evidence.mjs before' \

@@ -1,6 +1,6 @@
 [package]
 name = "axocoatl-cli"
-version = "1.5.2"
+version = "1.5.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,19 +17,19 @@ name = "axocoatl"
 path = "src/main.rs"
 
 [dependencies]
-axocoatl-core = { version = "1.5.2", path = "../crates/axocoatl-core" }
-axocoatl-config = { version = "1.5.2", path = "../crates/axocoatl-config" }
-axocoatl-daemon = { version = "1.5.2", path = "../crates/axocoatl-daemon" }
-axocoatl-actor = { version = "1.5.2", path = "../crates/axocoatl-actor" }
-axocoatl-server = { version = "1.5.2", path = "../axocoatl-server" }
-axocoatl-memory = { version = "1.5.2", path = "../crates/axocoatl-memory" }
-axocoatl-service = { version = "1.5.2", path = "../crates/axocoatl-service" }
-axocoatl-session = { version = "1.5.2", path = "../crates/axocoatl-session" }
-axocoatl-isolation = { version = "1.5.2", path = "../crates/axocoatl-isolation" }
-axocoatl-llm = { version = "1.5.2", path = "../crates/axocoatl-llm" }
-axocoatl-llm-ollama = { version = "1.5.2", path = "../crates/axocoatl-llm-ollama" }
-axocoatl-llm-openai = { version = "1.5.2", path = "../crates/axocoatl-llm-openai" }
-axocoatl-mcp = { version = "1.5.2", path = "../crates/axocoatl-mcp" }
+axocoatl-core = { version = "1.5.3", path = "../crates/axocoatl-core" }
+axocoatl-config = { version = "1.5.3", path = "../crates/axocoatl-config" }
+axocoatl-daemon = { version = "1.5.3", path = "../crates/axocoatl-daemon" }
+axocoatl-actor = { version = "1.5.3", path = "../crates/axocoatl-actor" }
+axocoatl-server = { version = "1.5.3", path = "../axocoatl-server" }
+axocoatl-memory = { version = "1.5.3", path = "../crates/axocoatl-memory" }
+axocoatl-service = { version = "1.5.3", path = "../crates/axocoatl-service" }
+axocoatl-session = { version = "1.5.3", path = "../crates/axocoatl-session" }
+axocoatl-isolation = { version = "1.5.3", path = "../crates/axocoatl-isolation" }
+axocoatl-llm = { version = "1.5.3", path = "../crates/axocoatl-llm" }
+axocoatl-llm-ollama = { version = "1.5.3", path = "../crates/axocoatl-llm-ollama" }
+axocoatl-llm-openai = { version = "1.5.3", path = "../crates/axocoatl-llm-openai" }
+axocoatl-mcp = { version = "1.5.3", path = "../crates/axocoatl-mcp" }
 clap = { workspace = true }
 rmcp = { workspace = true }
 async-trait = { workspace = true }
@@ -75,13 +75,13 @@ live-verify = ["axocoatl-daemon/live-verify"]
 tempfile = "3.27"
 # Onboarding's OpenRouter tests read model endpoints from a fake OpenRouter
 # on a loopback address, which only this feature of the test build admits.
-axocoatl-llm-openai = { version = "1.5.2", path = "../crates/axocoatl-llm-openai", features = ["test-loopback-endpoint"] }
+axocoatl-llm-openai = { version = "1.5.3", path = "../crates/axocoatl-llm-openai", features = ["test-loopback-endpoint"] }
 # Test servers that stand in for Ollama answer the contract probes as Ollama
 # 0.40 does (`axocoatl_llm_ollama::ContractProbe`).
-axocoatl-llm-ollama = { version = "1.5.2", path = "../crates/axocoatl-llm-ollama", features = ["contract-probe-stand-in"] }
+axocoatl-llm-ollama = { version = "1.5.3", path = "../crates/axocoatl-llm-ollama", features = ["contract-probe-stand-in"] }
 # Onboarding's and doctor's tests answer Podman's probes with fake `podman`
 # scripts, which a loaded computer can run slower than the product bound.
-axocoatl-isolation = { version = "1.5.2", path = "../crates/axocoatl-isolation", features = ["test-support"] }
+axocoatl-isolation = { version = "1.5.3", path = "../crates/axocoatl-isolation", features = ["test-support"] }
 # `connect codex --refresh`'s end-to-end test serves the daemon's API router
 # in the test process.
 axum = { workspace = true }

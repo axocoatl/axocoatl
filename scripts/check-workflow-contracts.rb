@@ -340,10 +340,10 @@ end
 release = YAML.load_file(ROOT.join(".github/workflows/release.yml"))
 jobs = release.fetch("jobs")
 expected_needs = {
-  "build" => %w[test-gate marketing-site docs-site product-browser new-user-evidence],
-  "prove-artifacts" => %w[build],
+  "build" => %w[new-user-evidence],
+  "prove-artifacts" => %w[build test-gate marketing-site docs-site product-browser new-user-evidence new-user-linux],
   "new-user-linux" => %w[build],
-  "prepare-release" => %w[prove-artifacts new-user-linux],
+  "prepare-release" => %w[test-gate marketing-site docs-site product-browser new-user-evidence prove-artifacts new-user-linux],
   "publish-crates" => %w[prepare-release],
   "release" => %w[prepare-release publish-crates],
   "deploy-marketing" => %w[release marketing-site],
@@ -360,10 +360,11 @@ release_steps = lambda do |job|
 end
 
 # The clean-machine new-user gate (docs/RELEASE_GATE.md): nothing is built
-# without signed evidence, the draft waits for Tier A on the release's own
-# archives, and the publish job checks the evidence again before touching the
-# release. The override input reaches the check only through env, and only a
-# workflow_dispatch run can carry it.
+# without signed evidence. Candidate builds and Tier A overlap the other
+# gates; attestation and the draft wait for every gate, including Tier A
+# on the release's own archives. The publish job checks the
+# evidence again before touching the release. The override input reaches the
+# check only through env, and only a workflow_dispatch run can carry it.
 evidence_check = "node scripts/release-gate/check-evidence.mjs"
 evidence_steps = lambda do |job|
   release_steps.call(job).select { |step| step["run"].to_s.include?(evidence_check) }
@@ -552,8 +553,8 @@ unless step_position.call("test-gate", "Require a monotonic stable release versi
 end
 
 # Build provenance: prove-artifacts, which verified the four archives, signs
-# an attestation of each and proves it verifies for this workflow at this
-# tag; only that job may ask for an OIDC token.
+# an attestation of each only after every release gate passes and proves it
+# verifies for this workflow at this tag; only that job may ask for an OIDC token.
 attest_steps = release_steps.call("prove-artifacts")
 attest = attest_steps.index { |step| step["uses"].to_s.start_with?("actions/attest-build-provenance@") }
 verify_set = attest_steps.index { |step| step["name"] == "Verify checksums, contents, and completeness" }
@@ -582,8 +583,8 @@ jobs.each do |job_name, job|
 end
 
 # The browser gate: ci.yml's product-browser legs, which release.yml repeats
-# before anything is built: the release build in Chromium on x86_64 and
-# aarch64 Linux, and in WebKit on x86_64 Linux and macOS.
+# before artifact attestation or publication: the release build in Chromium
+# on x86_64 and aarch64 Linux, and in WebKit on x86_64 Linux and macOS.
 ci = YAML.load_file(ROOT.join(".github/workflows/ci.yml"))
 { "ci.yml" => ci, "release.yml" => release }.each do |file, document|
   job = document.dig("jobs", "product-browser") || {}
