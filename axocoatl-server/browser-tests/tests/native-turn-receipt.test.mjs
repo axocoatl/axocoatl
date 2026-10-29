@@ -6,7 +6,7 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 
 import { chromium } from 'playwright';
-import { REPOSITORY_ROOT, newAuthorizedContext, resolveChromiumExecutable, launchTestDaemon } from '../support/daemon.mjs';
+import { REPOSITORY_ROOT, isWebKitLoadDiagnostic, newAuthorizedContext, resolveChromiumExecutable, launchTestDaemon } from '../support/daemon.mjs';
 import { answerContractProbe, OLLAMA_VERSION } from '../support/ollama.mjs';
 
 // Actual native dashboard Send -> real repository edit, required host check and
@@ -126,7 +126,7 @@ test('a dashboard task downloads a trusted signed receipt of its real checks, re
   const session=created.json;
   const context=await newAuthorizedContext(browser,{viewport:{width:1280,height:900},colorScheme:'dark',reducedMotion:'reduce',acceptDownloads:true});
   const page=await context.newPage(),errors=[];
-  page.on('pageerror',error=>errors.push(error.message));
+  page.on('pageerror',error=>{ if (!isWebKitLoadDiagnostic(error)) errors.push(error.message); });
   try {
     await page.goto(`${runtime.baseUrl}/?session=${session.id}`,{waitUntil:'domcontentloaded'});
     await page.getByRole('button',{name:'Team and budget',exact:true}).click();
