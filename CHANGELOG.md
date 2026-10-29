@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-10-29
+
 ### Added
 - Signed receipts for finished native dashboard Session turns. Conversation and
   History expose the download beside the request, with retained check, review,
@@ -16,6 +18,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 - Document the dashboard receipt workflow in the first-Session guide, README and
   public sites, while preserving the version and scope of existing recordings.
+
+### Fixed
+- Keep a finished turn's signed receipt byte-for-byte stable after daemon restart,
+  later requests and History downloads. Later repository reattachment metadata
+  does not change the original execution evidence bound by the receipt.
+- Preserve check and review failures and interrupted turns in their receipts;
+  checks or reviews that did not run remain distinguishable from passing work.
+
+### Verification scope
+- Acceptance for this patch used the actual dashboard in a browser: open a
+  workspace, apply a team, send a request, observe the lead and required checks
+  and review, inspect the result, and download and verify the signed receipt.
+  The exercised cases also covered a failed reviewer, cancellation, daemon
+  restart and downloading an earlier receipt from History after a later turn.
+- At the maintainer's direction, fresh human-operated Mac onboarding and provider
+  sign-ins (`C1-local`, `C1-claude-code`, `C1-codex`, `C1-openrouter`), the full
+  associated live service, workbench, recovery and real-repository gate paths
+  (`C1-service`, `C1-workbench-webkit`, `C1-recovery`, `C1-real-repo`), and
+  live-provider Linux `D1` were not rerun as release-gate paths for 1.5.2.
+  Publication uses the founder new-user-evidence exception for this explicitly
+  selected scope. The 1.5.1 exception and older evidence remain historical;
+  they do not establish 1.5.2 onboarding. Automated publication gates remain
+  required by the release workflow. See
+  [the acceptance record](https://github.com/axocoatl/axocoatl/blob/v1.5.2/docs/RELEASE_1.5.2_ACCEPTANCE.md).
 
 ## [1.5.1] - 2026-10-28
 

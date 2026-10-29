@@ -16,7 +16,7 @@ description = "YAML/TOML configuration parser with validation for Axocoatl"
 exclude = ["tests/yaml_golden/", "tests/yaml_differential.rs"]
 
 [dependencies]
-axocoatl-core = { version = "1.5.1", path = "../axocoatl-core" }
+axocoatl-core = { version = "1.5.2", path = "../axocoatl-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 granit-parser = { workspace = true }

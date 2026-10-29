@@ -116,6 +116,29 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v1.5.2</span>
+        <span class="release-date">2026-10-29</span>
+        <h2>Download a signed receipt for a dashboard turn.</h2>
+        <p>A finished native Session turn now has a signed receipt beside the
+          request in Conversation and History. It retains the check and review
+          outcomes, selected models and captured-file evidence for offline
+          verification against a trusted signing key.</p>
+        <ul>
+          <li>Failed checks, failed reviews and interrupted turns keep their
+              recorded outcomes. Work that did not run is not shown as passed.</li>
+          <li>Downloading the receipt after a daemon restart or a later request
+              returns the same signed bytes for the finished turn.</li>
+        </ul>
+        <p><strong>Verification scope:</strong> this patch was exercised through
+          the actual dashboard, including successful work, a failed review,
+          cancellation, restart and History downloads. Fresh onboarding and the
+          full live-provider release-gate paths were not rerun under the
+          maintainer's browser acceptance decision. The
+          <a href="https://github.com/axocoatl/axocoatl/releases/tag/v1.5.2">release notes</a>
+          list the scope. Automated publication gates remain required.</p>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v1.5.1</span>
         <span class="release-date">2026-10-28</span>
         <h2>Receipt recovery keeps the recorded outcome consistent.</h2>
