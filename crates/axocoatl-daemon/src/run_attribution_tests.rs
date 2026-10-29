@@ -59,6 +59,88 @@ fn capture(phase: CapturePhase, manifest: Option<&str>) -> CaptureFacts {
     }
 }
 
+#[test]
+fn native_receipts_do_not_hide_an_uncaptured_writer_in_a_captured_team() {
+    let before = line("counter.rs", "file", &"1".repeat(64));
+    let after = line("counter.rs", "file", &"2".repeat(64));
+    let mut attribution = RunAttribution::default();
+    attribution.add_activation_requiring_capture(
+        "captured lead",
+        &[
+            capture(CapturePhase::Before, Some(&before)),
+            capture(CapturePhase::After, Some(&after)),
+        ],
+    );
+    let mut missing = capture(CapturePhase::Before, None);
+    missing.unavailable = Some("profile does not permit repository capture".into());
+    missing.tree_sha256 = None;
+    attribution.add_activation_requiring_capture("unrestricted file-tool writer", &[missing]);
+    assert_eq!(attribution.captured, 1);
+    let files = receipt_files_from_captures(&attribution, &[]);
+    assert!(!files.facts.complete);
+    assert!(files
+        .facts
+        .unattributed
+        .iter()
+        .any(|reason| reason.contains("unrestricted file-tool writer")));
+    assert!(files.facts.read_at_finish.is_empty());
+}
+
+#[test]
+fn historical_receipts_never_fill_missing_hashes_from_a_later_checkout() {
+    let retained = line("changed.txt", "file", &"1".repeat(64));
+    let attribution = RunAttribution {
+        paths: paths(&["changed.txt", "restored.txt"]),
+        last_writer_after: Some(CapturedTree {
+            tree_sha256: "a".repeat(64),
+            manifest: None,
+            changed: Some(retained),
+        }),
+        ..RunAttribution::default()
+    };
+    let files = receipt_files_from_captures(&attribution, &[]);
+    assert_eq!(
+        files.subject,
+        vec![Subject::sha256("changed.txt", "1".repeat(64))]
+    );
+    assert!(files.facts.read_at_finish.is_empty());
+    assert!(!files.facts.complete);
+    assert!(files
+        .facts
+        .unattributed
+        .iter()
+        .any(|why| why.contains("restored.txt") && why.contains("historical")));
+}
+
+#[test]
+fn historical_receipts_use_the_checked_tree_or_report_missing_captures() {
+    let manifest = line("result.txt", "file", &"2".repeat(64));
+    let captured = tree(&manifest);
+    let attribution = RunAttribution {
+        paths: paths(&["result.txt"]),
+        checked: vec![captured.clone()],
+        ..RunAttribution::default()
+    };
+    let files = receipt_files_from_captures(&attribution, &[check(Some(&captured.tree_sha256))]);
+    assert_eq!(
+        files.subject,
+        vec![Subject::sha256("result.txt", "2".repeat(64))]
+    );
+    assert!(files.facts.complete);
+    assert_eq!(files.facts.source, source::JUDGED_CAPTURE);
+    let missing = receipt_files_from_captures(
+        &RunAttribution {
+            checked: vec![],
+            ..attribution
+        },
+        &[],
+    );
+    assert!(missing.subject.is_empty());
+    assert!(!missing.facts.complete);
+    assert_eq!(missing.facts.source, "not_captured");
+    assert!(missing.facts.read_at_finish.is_empty());
+}
+
 /// The judged capture's digests, links and deletions; Git's own files and
 /// unattributable activations make the list incomplete.
 #[test]

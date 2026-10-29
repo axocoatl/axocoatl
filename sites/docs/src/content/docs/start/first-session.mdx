@@ -70,7 +70,8 @@ Malformed responses needed recovery. Review found removed original tests and
 requested their restoration. Scout also claimed tests it had not run: use the
 host's check output and the actual files as evidence. The final correction passed
 the host check and independent artifact review. This is one prepared task, not a
-model comparison, and an ordinary Session does not produce a signed receipt.
+model comparison. This 1.5.0 recording predates dashboard turn receipts; the
+receipt step below applies to current native Sessions.
 
 [Recording sources and edits](https://axocoatl.ai/assets/demo/dashboard-task-1.5/provenance.json) ·
 [Actual patch and artifact review](https://axocoatl.ai/assets/demo/dashboard-task-1.5/artifact-evidence.json)
@@ -181,9 +182,23 @@ original tests before accepting the fix.
 
 <Aside type="note" title="You decide what to commit">
 The normal result leaves edits in the Session working tree. Source Control offers
-stage, unstage, discard, hunk review and commit as deliberate actions. Workbench
-turns retain their evidence in History; they do not issue headless-run receipts.
+stage, unstage, discard, hunk review and commit as deliberate actions. History
+retains the request, its execution evidence and its signed turn receipt.
 </Aside>
+
+## 5. Download the signed receipt
+
+Below the finished turn, find **Signed receipt** and select **Download signed
+receipt**. Download signs the retained turn evidence; the same receipt remains
+reachable from **History → Signed receipt** after a reload.
+It records the turn and its revision, Agents and models, recorded checks and review,
+and file hashes from the retained repository captures. Checks and review appear
+as performed only when they actually ran.
+
+Keep the downloaded file with the result you reviewed. A teammate can verify it
+offline against a trusted key and the covered repository files. The receipt shows
+its coverage; a signature establishes what was signed, not that the code is correct.
+[Read the receipt fields and verification steps](/workbench/receipts/).
 
 ## Setup details
 

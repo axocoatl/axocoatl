@@ -320,6 +320,8 @@ below.
 | GET | `/api/sessions/{id}/active-turn` | Exact live run/turn ownership for Stop, or `null` |
 | GET | `/api/sessions/{id}/turns/{turn_id}` | One canonical turn owned by this Session, in the same [form](#session-history-versions) as the list |
 | GET | `/api/sessions/{id}/turns/{turn_id}/control-plane` | Versioned read-only execution evidence for the exact Session and turn |
+| GET | `/api/sessions/{id}/turns/{turn_id}/receipt/status` | Read-only native turn receipt availability; never creates a signature |
+| GET | `/api/sessions/{id}/turns/{turn_id}/receipt` | Sign and download a finished native turn's retained evidence, or return the cached envelope for that exact revision; never hashes the current checkout |
 | GET | `/api/sessions/{id}/network?after=<seq>&limit=<1-1000>` | The Session's [network record](#session-network-record): mode, egress policy and recorded events after `after` (default `limit` 200) |
 | POST | `/api/sessions/{id}/network/allow` | `{command_id, scope, host, ports?}`; under `network: egress`, allow one exact host for this Session. Returns `{revision, digest}` |
 | POST | `/api/sessions/{id}/network/revoke` | `{command_id, scope, host}`; remove this Session's allows for one host and close the connections they admitted. Returns `{revision, digest}` |

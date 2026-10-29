@@ -210,6 +210,14 @@ pub fn build_router(
             get(routes::session_turn),
         )
         .route(
+            "/api/sessions/{id}/turns/{turn_id}/receipt/status",
+            get(routes::session_turn_receipt_status),
+        )
+        .route(
+            "/api/sessions/{id}/turns/{turn_id}/receipt",
+            get(routes::session_turn_receipt),
+        )
+        .route(
             "/api/sessions/{id}/turns/{turn_id}/control-plane",
             get(routes::session_turn_control_plane),
         )

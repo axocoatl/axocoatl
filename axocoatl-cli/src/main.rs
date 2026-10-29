@@ -206,7 +206,8 @@ enum Commands {
         command: run_cmd::RecordCommands,
     },
 
-    /// Signed receipts of loadout runs: show, verify, and this computer's key
+    /// Signed receipts of Session turns and loadout runs: show, verify, and
+    /// this computer's key
     Receipt {
         #[command(subcommand)]
         command: receipt_cmd::ReceiptCommands,

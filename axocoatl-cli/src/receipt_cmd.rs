@@ -69,8 +69,8 @@ pub enum ReceiptCommands {
         /// Check that this record bundle verifies and carries this receipt
         #[arg(long, value_name = "BUNDLE")]
         record: Option<PathBuf>,
-        /// Fail (exit 6) when the run's verdict is not `pass`: a receipt
-        /// of a run whose checks failed or that needs attention verifies too
+        /// Fail (exit 6) when the receipt's verdict is not `pass`: a receipt
+        /// with failed checks or an outcome needing attention verifies too
         #[arg(long)]
         require_pass: bool,
         /// Print the result as one JSON document
@@ -497,7 +497,7 @@ fn print_report(report: &VerifyReport, json: bool, out: &mut dyn std::io::Write)
     if let Some(run) = &report.run_id {
         let _ = writeln!(
             out,
-            "receipt of run {run}, verdict {}",
+            "receipt {run}, verdict {}",
             report.verdict.as_deref().unwrap_or("?")
         );
     }
@@ -533,7 +533,7 @@ fn print_report(report: &VerifyReport, json: bool, out: &mut dyn std::io::Write)
                 if files.complete {
                     ""
                 } else {
-                    "; the receipt does not cover every path the run changed"
+                    "; the receipt does not cover every changed path"
                 }
             );
         } else {
@@ -606,8 +606,8 @@ fn key(config: &Path, rotate: bool) -> i32 {
         Ok((key, created)) => {
             if created {
                 eprintln!(
-                    "Made a new receipt signing key {} for {}; the daemon signs every finished run \
-                     with it.",
+                    "Made a new receipt signing key {} for {}; the daemon uses it for receipts \
+                     of Session turns and loadout runs.",
                     key.public().short_id(),
                     data_dir.display()
                 );

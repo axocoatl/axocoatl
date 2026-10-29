@@ -147,11 +147,18 @@ pub struct Statement {
 pub struct Predicate {
     pub run: RunFacts,
     pub repository: RepositoryFacts,
-    pub loadout: LoadoutFacts,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loadout: Option<LoadoutFacts>,
+    /// Ordinary dashboard turns carry their own immutable provenance, never
+    /// a fabricated loadout identity. Old run receipts omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_turn: Option<NativeTurnFacts>,
     pub agents: Vec<AgentFacts>,
-    pub sandbox: SandboxFacts,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<SandboxFacts>,
     /// The Outcome's network summary.
-    pub network: NetworkSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkSummary>,
     pub checks: Vec<CheckFacts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewFacts>,
@@ -176,7 +183,9 @@ pub struct RunFacts {
     pub run_id: String,
     pub session_id: String,
     pub started_at_ms: u64,
-    pub finished_at_ms: u64,
+    /// Absent when the retained native evidence does not record closure time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at_ms: Option<u64>,
     /// The Axocoatl version that signed.
     pub axocoatl_version: String,
     /// SHA-256 of the task text (the text is in the record).
@@ -204,6 +213,22 @@ pub struct LoadoutFacts {
     /// SHA-256 of the exact loadout file.
     pub digest: String,
     pub builtin: bool,
+}
+
+/// Evidence identity of an ordinary native Session turn. This records the
+/// terminal revision, not today's mutable team or repository configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeTurnFacts {
+    pub turn_id: String,
+    pub turn_revision: u64,
+    pub graph_revision: u64,
+    pub state: String,
+    pub evidence_sha256: String,
+    pub configuration_revisions: Vec<u64>,
+    pub definition_snapshots: Vec<String>,
+    /// Facts that the retained turn cannot establish. Absent policy or
+    /// network fields are unknown, never a claim of isolation or zero egress.
+    pub limitations: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -370,7 +395,8 @@ pub struct CheckFacts {
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
-    pub timeout_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
     pub argv: Vec<String>,
     /// The repository tree the check ran on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -624,6 +650,52 @@ pub fn statement_bytes(statement: &Statement) -> Result<Vec<u8>, ReceiptError> {
     serde_json::to_vec(statement).map_err(|error| ReceiptError::Signing(error.to_string()))
 }
 
+fn validate_provenance(statement: &Statement) -> Result<(), ReceiptError> {
+    let predicate = &statement.predicate;
+    match (&predicate.loadout, &predicate.native_turn) {
+        (Some(_), None) if predicate.sandbox.is_some() && predicate.network.is_some() => Ok(()),
+        (None, Some(turn)) => {
+            let digest = &turn.evidence_sha256;
+            if turn.turn_id.is_empty()
+                || turn.turn_id != predicate.run.run_id
+                || predicate.run.session_id.is_empty()
+                || turn.turn_revision == 0
+                || turn.graph_revision == 0
+                || digest.len() != 64
+                || !digest.bytes().all(|b| b.is_ascii_hexdigit())
+                || !matches!(turn.state.as_str(), "completed" | "cancelled" | "finished")
+            {
+                return Err(malformed(
+                    "native receipt provenance is inconsistent or not terminal",
+                ));
+            }
+            let expected = match turn.state.as_str() {
+                "completed" => (RunVerdict::Pass, 0),
+                "cancelled" => (RunVerdict::Interrupted, 6),
+                _ => (RunVerdict::NeedsAttention, 2),
+            };
+            if (predicate.verdict, predicate.exit_code) != expected {
+                return Err(malformed(
+                    "native receipt verdict disagrees with its terminal state",
+                ));
+            }
+            if turn.state == "completed"
+                && (predicate.checks.iter().any(|check| check.state != "passed")
+                    || predicate
+                        .review
+                        .as_ref()
+                        .is_some_and(|review| !review.passed))
+            {
+                return Err(malformed("a completed native receipt cannot contain failed or unavailable completion conditions"));
+            }
+            Ok(())
+        }
+        _ => Err(malformed(
+            "a receipt must name exactly one complete loadout or native turn provenance",
+        )),
+    }
+}
+
 /// Sign `statement` with `key_pair`. Its `predicate.signer` must name that
 /// key. Returns the envelope and the exact statement bytes it carries.
 pub fn sign_statement(
@@ -641,6 +713,7 @@ pub fn sign_statement(
             "the statement's _type or predicateType is not a receipt's".into(),
         ));
     }
+    validate_provenance(statement)?;
     let payload = statement_bytes(statement)?;
     let signature = key_pair.sign(&pae(PAYLOAD_TYPE, &payload));
     let envelope = Envelope {
@@ -756,6 +829,7 @@ pub fn open_envelope(envelope: Envelope) -> Result<OpenedReceipt, ReceiptError> 
     }
     let statement: Statement = serde_json::from_value(value)
         .map_err(|error| malformed(format!("the statement is not a receipt: {error}")))?;
+    validate_provenance(&statement)?;
     Ok(OpenedReceipt {
         envelope,
         payload,
@@ -1237,25 +1311,43 @@ fn source_words(source: &str) -> &'static str {
 pub fn describe(statement: &Statement) -> Vec<String> {
     let predicate = &statement.predicate;
     let run = &predicate.run;
-    let mut lines = vec![
-        format!(
+    let identity = match (&predicate.loadout, &predicate.native_turn) {
+        (Some(loadout), None) => format!(
             "Run {} ({}@{}), verdict {}, exit code {}",
             run.run_id,
-            predicate.loadout.id,
-            predicate.loadout.version,
+            loadout.id,
+            loadout.version,
             verdict_words(predicate.verdict),
             predicate.exit_code
         ),
+        (None, Some(turn)) => format!(
+            "Session turn {} (revision {}, {}), verdict {}, exit code {}",
+            turn.turn_id,
+            turn.turn_revision,
+            turn.state,
+            verdict_words(predicate.verdict),
+            predicate.exit_code
+        ),
+        _ => format!("Run {} (unrecognized provenance)", run.run_id),
+    };
+    let mut lines = vec![
+        identity,
         format!(
             "Signed by key {} ({} {})",
             short_key_id(&predicate.signer.key_id),
             predicate.signer.algorithm,
             predicate.signer.key_id
         ),
-        format!(
-            "Axocoatl {}, Session {}, finished at {} ms",
-            run.axocoatl_version, run.session_id, run.finished_at_ms
-        ),
+        match run.finished_at_ms {
+            Some(finished) => format!(
+                "Axocoatl {}, Session {}, finished at {} ms",
+                run.axocoatl_version, run.session_id, finished
+            ),
+            None => format!(
+                "Axocoatl {}, Session {} (closure timestamp not retained)",
+                run.axocoatl_version, run.session_id
+            ),
+        },
     ];
     if let Some(base) = &predicate.repository.base_commit {
         let origin = predicate
@@ -1374,33 +1466,42 @@ pub fn describe(statement: &Statement) -> Vec<String> {
     for removed in &files.removed {
         lines.push(format!("  {removed}  removed"));
     }
-    for policy in &predicate.sandbox.policies {
-        lines.push(format!(
-            "Network policy ({} scope, revision {}): {}",
-            policy.scope,
-            policy.revision,
-            if policy.rules.is_empty() {
-                "nothing allowed".to_string()
-            } else {
-                policy.rules.join("; ")
+    if let Some(sandbox) = &predicate.sandbox {
+        for policy in &sandbox.policies {
+            lines.push(format!(
+                "Network policy ({} scope, revision {}): {}",
+                policy.scope,
+                policy.revision,
+                if policy.rules.is_empty() {
+                    "nothing allowed".to_string()
+                } else {
+                    policy.rules.join("; ")
+                }
+            ));
+            for route in &policy.routes {
+                let check = match route.provider_fetch.as_deref() {
+                    Some("refuse") => "model-call bodies checked, provider fetches refused",
+                    Some("allow") => "model-call bodies sent unread (provider_fetch: allow)",
+                    Some(_) => "model-call body check unknown",
+                    None => "bodies not checked (not a model API)",
+                };
+                lines.push(format!("  {} {}: {check}", route.id, route.host));
             }
+        }
+        lines.push(format!(
+            "Sandbox: {}, network {}, {} workload",
+            sandbox.backend, sandbox.network, sandbox.workload
         ));
-        for route in &policy.routes {
-            let check = match route.provider_fetch.as_deref() {
-                Some("refuse") => "model-call bodies checked, provider fetches refused",
-                Some("allow") => "model-call bodies sent unread (provider_fetch: allow)",
-                Some(_) => "model-call body check unknown",
-                None => "bodies not checked (not a model API)",
-            };
-            lines.push(format!("  {} {}: {check}", route.id, route.host));
+        if let Some(limits) = &sandbox.limits {
+            lines.push(limits_line(limits));
         }
     }
-    lines.push(format!(
-        "Sandbox: {}, network {}, {} workload",
-        predicate.sandbox.backend, predicate.sandbox.network, predicate.sandbox.workload
-    ));
-    if let Some(limits) = &predicate.sandbox.limits {
-        lines.push(limits_line(limits));
+    if let Some(turn) = &predicate.native_turn {
+        lines.extend(
+            turn.limitations
+                .iter()
+                .map(|why| format!("Not established: {why}")),
+        );
     }
     lines
 }
@@ -1472,7 +1573,7 @@ mod tests {
                     run_id: "run-00000000-0000-4000-8000-000000000001".into(),
                     session_id: "ses-00000000-0000-4000-8000-000000000002".into(),
                     started_at_ms: 1_000,
-                    finished_at_ms: 2_000,
+                    finished_at_ms: Some(2_000),
                     axocoatl_version: "1.4.0".into(),
                     task_sha256: sha256_hex(b"fix it"),
                 },
@@ -1481,13 +1582,14 @@ mod tests {
                     dirty_paths: Vec::new(),
                     origin_url: Some("https://github.com/acme/widgets.git".into()),
                 },
-                loadout: LoadoutFacts {
+                loadout: Some(LoadoutFacts {
                     id: "fix".into(),
                     version: 1,
                     kind: "fix".into(),
                     digest: "d".repeat(64),
                     builtin: true,
-                },
+                }),
+                native_turn: None,
                 agents: vec![AgentFacts {
                     id: "writer".into(),
                     role: "writer".into(),
@@ -1497,7 +1599,7 @@ mod tests {
                     model: "qwen3-coder:30b".into(),
                     credential: None,
                 }],
-                sandbox: SandboxFacts {
+                sandbox: Some(SandboxFacts {
                     backend: "podman".into(),
                     network: "egress".into(),
                     workload: "hardened".into(),
@@ -1510,13 +1612,13 @@ mod tests {
                     }],
                     environment: None,
                     limits: None,
-                },
-                network: NetworkSummary::default(),
+                }),
+                network: Some(NetworkSummary::default()),
                 checks: vec![CheckFacts {
                     name: "tests".into(),
                     state: "passed".into(),
                     exit_code: Some(0),
-                    timeout_ms: 180_000,
+                    timeout_ms: Some(180_000),
                     argv: vec!["python3".into(), "-m".into(), "pytest".into()],
                     candidate_sha256: Some("f".repeat(64)),
                 }],
@@ -1662,7 +1764,7 @@ mod tests {
         assert!(!describe(&statement)
             .iter()
             .any(|line| line.starts_with("Resource caps")));
-        statement.predicate.sandbox.limits = Some(crate::SessionResourceLimits {
+        statement.predicate.sandbox.as_mut().unwrap().limits = Some(crate::SessionResourceLimits {
             memory: Some("2g".into()),
             cpus: None,
             pids: Some(512),
@@ -1671,7 +1773,7 @@ mod tests {
         let text = serde_json::to_string(&statement.predicate.sandbox).unwrap();
         assert!(text.contains(r#""limits":{"memory":"2g","pids":512,"not_applied":["CPU (2 CPUs, cgroup controller cpu)"]}"#), "{text}");
         let read: SandboxFacts = serde_json::from_str(&text).unwrap();
-        assert_eq!(read, statement.predicate.sandbox);
+        assert_eq!(Some(read), statement.predicate.sandbox);
         let said = describe(&statement);
         assert!(said.contains(&"Resource caps: memory 2g, 512 processes; not applied, this host does not delegate their cgroup controllers: CPU (2 CPUs, cgroup controller cpu)".to_string()), "{said:?}");
     }
@@ -1691,7 +1793,7 @@ mod tests {
         let mut statement = statement(public_key_of(&key_pair).signer());
         let plain = serde_json::to_string(&statement.predicate.sandbox).unwrap();
         assert!(!plain.contains("environment"), "{plain}");
-        statement.predicate.sandbox.environment = Some(EnvironmentFacts {
+        statement.predicate.sandbox.as_mut().unwrap().environment = Some(EnvironmentFacts {
             toolchain: Some("python".into()),
             reason: "pyproject.toml at the repository root".into(),
             image: "localhost/axocoatl-recipe-python:eb24246cd089".into(),
@@ -1727,8 +1829,14 @@ mod tests {
         let (envelope, _) = sign_statement(&key_pair, &statement).unwrap();
         let opened = opened(&envelope).unwrap();
         assert_eq!(
-            opened.statement.predicate.sandbox.environment,
-            statement.predicate.sandbox.environment
+            opened
+                .statement
+                .predicate
+                .sandbox
+                .as_ref()
+                .unwrap()
+                .environment,
+            statement.predicate.sandbox.as_ref().unwrap().environment
         );
         assert!(matches!(
             check_signature(&opened, &[public_key_of(&key_pair)]),
@@ -2126,7 +2234,7 @@ mod tests {
         // is unchanged.
         let bare = String::from_utf8(statement_bytes(&statement).unwrap()).unwrap();
         assert!(bare.contains("access full, for agent)\"]}]}"), "{bare}");
-        statement.predicate.sandbox.policies[0].routes = vec![
+        statement.predicate.sandbox.as_mut().unwrap().policies[0].routes = vec![
             RouteFacts {
                 id: "host_ollama".into(),
                 host: "ollama.host.axocoatl.internal".into(),
@@ -2175,5 +2283,81 @@ mod tests {
         ] {
             assert!(text.contains(needle), "{needle}\n{text}");
         }
+    }
+
+    fn native_statement(signer: SignerFacts) -> Statement {
+        let mut value = statement(signer);
+        value.predicate.loadout = None;
+        value.predicate.sandbox = None;
+        value.predicate.network = None;
+        value.predicate.run.finished_at_ms = None;
+        value.predicate.native_turn = Some(NativeTurnFacts {
+            turn_id: value.predicate.run.run_id.clone(),
+            turn_revision: 12,
+            graph_revision: 1,
+            state: "completed".into(),
+            evidence_sha256: "a".repeat(64),
+            configuration_revisions: vec![2],
+            definition_snapshots: vec!["retained-lead".into()],
+            limitations: vec!["Historical sandbox and network facts are not recorded.".into()],
+        });
+        value
+    }
+
+    #[test]
+    fn native_turn_receipts_verify_without_fabricated_loadout_or_policy() {
+        let pair = key(RFC8032_SEED);
+        let public = public_key_of(&pair);
+        let value = native_statement(public.signer());
+        let (envelope, payload) = sign_statement(&pair, &value).unwrap();
+        let opened = open_envelope(envelope).unwrap();
+        assert!(matches!(
+            check_signature(&opened, &[public]),
+            SignatureCheck::Trusted { .. }
+        ));
+        assert_eq!(opened.statement, value);
+        let json: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert!(json["predicate"].get("loadout").is_none());
+        assert!(json["predicate"].get("sandbox").is_none());
+        assert!(json["predicate"].get("network").is_none());
+        assert!(json["predicate"]["run"].get("finished_at_ms").is_none());
+        let words = describe(&value).join("\n");
+        assert!(words.contains("Session turn"));
+        assert!(words.contains("closure timestamp not retained"));
+        assert!(!words.contains("hardened"));
+    }
+
+    #[test]
+    fn native_provenance_rejects_ambiguous_stale_and_inconsistent_assertions() {
+        let pair = key(RFC8032_SEED);
+        let good = native_statement(public_key_of(&pair).signer());
+        let mutate: &[fn(&mut Statement)] = &[
+            |s| s.predicate.loadout = statement(Default::default()).predicate.loadout,
+            |s| s.predicate.native_turn = None,
+            |s| s.predicate.native_turn.as_mut().unwrap().turn_id = "another-turn".into(),
+            |s| s.predicate.native_turn.as_mut().unwrap().turn_revision = 0,
+            |s| s.predicate.native_turn.as_mut().unwrap().graph_revision = 0,
+            |s| s.predicate.native_turn.as_mut().unwrap().evidence_sha256 = "not-a-digest".into(),
+            |s| s.predicate.native_turn.as_mut().unwrap().state = "running".into(),
+            |s| s.predicate.native_turn.as_mut().unwrap().state = "cancelled".into(),
+            |s| s.predicate.checks[0].state = "not_run".into(),
+            |s| s.predicate.review.as_mut().unwrap().passed = false,
+        ];
+        for change in mutate {
+            let mut invalid = good.clone();
+            change(&mut invalid);
+            assert!(sign_statement(&pair, &invalid).is_err());
+            let (mut envelope, _) = sign_statement(&pair, &good).unwrap();
+            envelope.payload = base64::engine::general_purpose::STANDARD
+                .encode(statement_bytes(&invalid).unwrap());
+            assert!(open_envelope(envelope).is_err());
+        }
+        let mut cancelled = good;
+        cancelled.predicate.native_turn.as_mut().unwrap().state = "cancelled".into();
+        cancelled.predicate.verdict = RunVerdict::Interrupted;
+        cancelled.predicate.exit_code = 6;
+        cancelled.predicate.checks[0].state = "not_run".into();
+        cancelled.predicate.review.as_mut().unwrap().passed = false;
+        assert!(sign_statement(&pair, &cancelled).is_ok());
     }
 }

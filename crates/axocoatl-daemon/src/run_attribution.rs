@@ -97,6 +97,25 @@ impl CapturedTree {
 impl RunAttribution {
     /// Add every activation of one native turn.
     pub fn add_execution_turn(&mut self, turn: &ExecutionTurnView) {
+        self.add_turn(turn, None);
+    }
+
+    /// A historical receipt must name every executed activation whose effect
+    /// cannot be established. A missing capture is not proof of a read-only
+    /// profile (an unrestricted file-tool writer can also lack captures).
+    pub fn add_native_receipt_turn(
+        &mut self,
+        turn: &ExecutionTurnView,
+        read_only_definitions: &BTreeSet<String>,
+    ) {
+        self.add_turn(turn, Some(read_only_definitions));
+    }
+
+    fn add_turn(
+        &mut self,
+        turn: &ExecutionTurnView,
+        read_only_definitions: Option<&BTreeSet<String>>,
+    ) {
         for activation in &turn.activations {
             let reference = &activation.activation.activation;
             let label = format!(
@@ -110,7 +129,26 @@ impl RunAttribution {
                 .iter()
                 .map(|view| CaptureFacts::from_snapshot(&view.content))
                 .collect();
-            self.add_activation(&label, &captures);
+            if read_only_definitions.is_some_and(|definitions| {
+                !definitions.contains(activation.activation.input.definition.snapshot.as_str())
+            }) && activation.activation.state
+                != axocoatl_session::turn_contract::ActivationState::Unstarted
+            {
+                self.add_activation_requiring_capture(&label, &captures);
+            } else {
+                self.add_activation(&label, &captures);
+            }
+        }
+    }
+
+    fn add_activation_requiring_capture(&mut self, label: &str, captures: &[CaptureFacts]) {
+        self.add_activation(label, captures);
+        if matches!(
+            attribute_activation(captures),
+            ActivationChanges::NotCaptured
+        ) {
+            self.last_writer_after = None;
+            self.unattributable.push(format!("{label}: repository Before/After captures are unavailable; its file effects cannot be established."));
         }
     }
 
@@ -683,6 +721,24 @@ pub fn receipt_files(
     checks: &[CheckResult],
     repo_root: &Path,
 ) -> ReceiptFiles {
+    receipt_files_with_fallback(attribution, checks, Some(repo_root))
+}
+
+/// A historical Session turn can be exported long after the checkout changed.
+/// Only retained captures may supply its file hashes; missing capture content
+/// is reported as incomplete, never filled from the current working tree.
+pub fn receipt_files_from_captures(
+    attribution: &RunAttribution,
+    checks: &[CheckResult],
+) -> ReceiptFiles {
+    receipt_files_with_fallback(attribution, checks, None)
+}
+
+fn receipt_files_with_fallback(
+    attribution: &RunAttribution,
+    checks: &[CheckResult],
+    repo_root: Option<&Path>,
+) -> ReceiptFiles {
     let captured = judged_tree(attribution, checks)
         .map(|tree| (receipt::source::JUDGED_CAPTURE, tree))
         .or_else(|| {
@@ -695,13 +751,18 @@ pub fn receipt_files(
     let recorded = captured.and_then(|(_, tree)| tree.recorded());
     let (source, tree_sha256) = match (&captured, &recorded) {
         (Some((source, tree)), Some(_)) => (source.to_string(), Some(tree.tree_sha256.clone())),
-        _ => (receipt::source::WORKSPACE_AT_FINISH.to_string(), None),
+        _ if repo_root.is_some() => (receipt::source::WORKSPACE_AT_FINISH.to_string(), None),
+        _ => ("not_captured".to_string(), None),
     };
     let mut subject = Vec::new();
     let mut links = Vec::new();
     let mut removed = Vec::new();
     let mut read_at_finish = Vec::new();
     let mut unattributed: Vec<String> = attribution.unattributable.clone();
+    let read_current = |path: &str| match repo_root {
+        Some(root) => receipt::hash_repo_path(root, path),
+        None => PathState::Other("its historical file hash is not retained in a capture".into()),
+    };
     let state_of = |entry: &ManifestEntry| {
         if std::str::from_utf8(&entry.path).is_err() {
             return PathState::Other("its name is not UTF-8".into());
@@ -735,11 +796,13 @@ pub fn receipt_files(
             Some(Recorded::Changed(entries)) => match entries.get(path) {
                 Some(entry) => state_of(entry),
                 None => {
-                    read_at_finish.push(path.clone());
-                    receipt::hash_repo_path(repo_root, path)
+                    if repo_root.is_some() {
+                        read_at_finish.push(path.clone());
+                    }
+                    read_current(path)
                 }
             },
-            None => receipt::hash_repo_path(repo_root, path),
+            None => read_current(path),
         };
         match state {
             PathState::File(digest) => subject.push(Subject::sha256(path.clone(), digest)),

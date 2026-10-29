@@ -936,6 +936,18 @@ diagnostic evidence, not the finished run's receipt. Reads also suppress a legac
 `receipt.dsse.json` when its recorded Outcome carries `receipt_unavailable`, so the
 receipt API, status summary and record bundle cannot expose that stale receipt.
 
+**Native dashboard turn receipts.** Finished native turns expose a separate receipt
+through `/api/sessions/{session_id}/turns/{turn_id}/receipt` and its `/status`
+projection. The statement identifies the exact native turn revision and graph revision
+in `native_turn`, rather than pretending to be a loadout. It is built from retained
+terminal evidence and signed on the first download request; download does not read
+or hash the mutable working tree. Existing repository captures supply covered-file
+hashes and absent capture evidence stays
+incomplete. Recorded check and review states remain separate from a signature.
+A cache is bound to the turn revision and evidence digest, so later execution cannot
+return an earlier receipt as the current result. Conversation and History expose the
+status and download; the updated offline CLI verifies the envelope and covered files.
+
 **Keep as PR.** For a passing run, host `git` commits exactly the run's attributed paths
 through a temporary `GIT_INDEX_FILE` seeded from HEAD (`update-index`, `write-tree`,
 `commit-tree -p HEAD`, `update-ref` of a new branch), refusing paths that were dirty before the run,

@@ -69,8 +69,8 @@ The `dashboard-1.5` slot contains real captures of the installed Axocoatl 1.5
 app reviewing one completed CLI-launched fix run. The hero shows its actual Files
 diff. The walkthrough and four stills show the conversation, code change, check and
 review, and signed receipt. Captions distinguish this saved loadout run from an
-interactive workbench turn, which has no receipt. The media is not a live model
-execution or a performance demonstration. Native video controls remain available
+interactive workbench turn recorded on 1.5.0, before native turn receipts. The media
+is not a live model execution or a performance demonstration. Native video controls remain available
 without JavaScript, and each still opens at full size.
 
 `assets/demo/dashboard-1.5/provenance.json` binds the captures, recording, exact

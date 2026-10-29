@@ -1,3 +1,4 @@
+import { turnHasReceipt, turnReceipt } from './turn-receipt.js';
 import { historyPresentation, executionHistorySummary } from './execution-history.js';
 import { adopt } from './sheets.js';
 
@@ -896,6 +897,17 @@ export class AxSessionHistory extends HTMLElement {
         list.append(evidence);
       });
       route.append(list); card.append(route);
+    }
+
+    if (turn.historyVersion === 'execution_v2' && turnHasReceipt(turn.status)) {
+      const receipt = document.createElement('details'); receipt.className = 'route signed-receipt';
+      const summary = document.createElement('summary'); summary.textContent = 'Signed receipt'; receipt.append(summary);
+      // A long History list must not materialize every turn's evidence merely
+      // because its cards were rendered. The selected disclosure owns the read.
+      receipt.addEventListener('toggle', () => {
+        if (receipt.open && !receipt.querySelector('ax-turn-receipt')) receipt.append(turnReceipt(turn.sessionId, turn.id));
+      });
+      card.append(receipt);
     }
 
     const foot = document.createElement('div'); foot.className = 'turn-foot';

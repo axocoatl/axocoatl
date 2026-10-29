@@ -317,7 +317,12 @@ export function renderExecutionHistoryTurn(view, {renderMarkdown, onGraph, onRef
     const line = document.createElement('p'); line.className = 'small muted turn-stop-evidence'; line.dataset.turnId = view.turn_id; line.textContent = text; fragment.append(line);
   }
   const state = document.createElement('div'); state.className = 'small muted'; state.dataset.turnId = view.turn_id;
-  state.textContent = `Turn: ${view.state.replaceAll('_', ' ')}`; fragment.append(state); return fragment;
+  state.textContent = `Turn: ${view.state.replaceAll('_', ' ')}`; fragment.append(state);
+  if (['completed', 'finished', 'cancelled'].includes(view.state)) {
+    const receipt = document.createElement('ax-turn-receipt');
+    receipt.setAttribute('session-id', view.owner.session_id); receipt.setAttribute('turn-id', view.turn_id); fragment.append(receipt);
+  }
+  return fragment;
 }
 
 // Frames only invalidate retained history. Coalesce reads per actual Session

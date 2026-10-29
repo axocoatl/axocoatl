@@ -1421,7 +1421,7 @@ async fn receipts_child_body() {
     assert_eq!(predicate.run.run_id, run_id);
     assert_eq!(predicate.verdict, RunVerdict::Error);
     assert_eq!(predicate.exit_code, exit_code::INFRASTRUCTURE);
-    assert_eq!(predicate.loadout.id, "native-run");
+    assert_eq!(predicate.loadout.as_ref().unwrap().id, "native-run");
     assert_eq!(predicate.agents.len(), 1);
     assert_eq!(predicate.agents[0].provider, "ollama");
     assert_eq!(predicate.agents[0].model, MODEL);
@@ -1437,10 +1437,10 @@ async fn receipts_child_body() {
         Some("https://github.com/acme/widgets.git")
     );
     assert!(!String::from_utf8_lossy(&opened.payload).contains("not-a-real-token"));
-    assert_eq!(predicate.sandbox.network, "egress");
-    assert_eq!(predicate.sandbox.backend, "podman");
+    assert_eq!(predicate.sandbox.as_ref().unwrap().network, "egress");
+    assert_eq!(predicate.sandbox.as_ref().unwrap().backend, "podman");
     // The Session's container never started, so no caps are recorded.
-    assert_eq!(predicate.sandbox.limits, None);
+    assert_eq!(predicate.sandbox.as_ref().unwrap().limits, None);
     assert_eq!(
         predicate.run.task_sha256,
         axocoatl_session::receipt::sha256_hex(manifest.task.as_bytes())
@@ -1529,7 +1529,10 @@ async fn receipts_child_body() {
         .unwrap();
     daemon.finish_loadout_run(&served.run_id, &outcome).unwrap();
     let opened = open_receipt(&daemon.loadout_run_receipt(&served.run_id).unwrap()).unwrap();
-    assert_eq!(opened.statement.predicate.sandbox.limits, Some(limits));
+    assert_eq!(
+        opened.statement.predicate.sandbox.as_ref().unwrap().limits,
+        Some(limits)
+    );
     assert!(axocoatl_session::receipt::describe(&opened.statement)
         .iter()
         .any(|line| line

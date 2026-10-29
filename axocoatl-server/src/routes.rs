@@ -1944,6 +1944,57 @@ pub async fn session_turn(
         .map_err(|error| err(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
 }
 
+/// Read the signing/coverage state of this exact native turn. No current
+/// Workspace files are read and no receipt is created by this status request.
+pub async fn session_turn_receipt_status(
+    State(state): State<AppState>,
+    Path((id, turn_id)): Path<(String, String)>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let value = state
+        .read()
+        .await
+        .native_turn_receipt_status(&id, &turn_id)
+        .await
+        .map_err(attempt_err)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(value)).into_response())
+}
+
+/// Download this native turn's signed, captured evidence. The daemon seals
+/// immutable terminal evidence on first download and returns the retained
+/// envelope thereafter; it never substitutes the present Workspace tree.
+pub async fn session_turn_receipt(
+    State(state): State<AppState>,
+    Path((id, turn_id)): Path<(String, String)>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let bytes = state
+        .read()
+        .await
+        .native_turn_receipt(&id, &turn_id)
+        .await
+        .map_err(attempt_err)?;
+    Ok(native_receipt_response(bytes, &turn_id))
+}
+
+fn native_receipt_response(bytes: Vec<u8>, turn_id: &str) -> Response {
+    let mut response = (
+        [
+            (
+                header::CONTENT_TYPE,
+                axocoatl_session::receipt::ENVELOPE_MEDIA_TYPE,
+            ),
+            (header::CACHE_CONTROL, "no-store"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes,
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        export_content_disposition(turn_id, "receipt.dsse.json"),
+    );
+    response
+}
+
 /// GET /api/sessions/{id}/turns/{turn_id}/control-plane — versioned, read-only
 /// graph and evidence for one retained turn. The Session and turn must match.
 pub async fn session_turn_control_plane(
@@ -8028,6 +8079,28 @@ pub async fn a2a_receive_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn native_receipt_download_preserves_envelope_and_prevents_cache_reuse() {
+        let bytes = br#"{"payload":"captured-evidence"}"#.to_vec();
+        let response = native_receipt_response(bytes.clone(), "turn-native");
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            axocoatl_session::receipt::ENVELOPE_MEDIA_TYPE
+        );
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            response.headers()[header::CONTENT_DISPOSITION],
+            "attachment; filename=\"turn-native.receipt.dsse.json\""
+        );
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap()
+                .as_ref(),
+            bytes.as_slice()
+        );
+    }
 
     #[test]
     fn network_proposal_and_reload_errors_have_their_statuses() {

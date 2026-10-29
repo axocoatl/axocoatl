@@ -1611,8 +1611,16 @@ async fn pinned_run(
         let predicate = &opened.statement.predicate;
         assert_eq!(predicate.run.run_id, accepted.run_id, "{context}");
         assert_eq!(predicate.verdict, outcome.verdict, "{context}");
-        assert_eq!(predicate.loadout.id, loadout_id, "{context}");
-        assert_eq!(predicate.loadout.builtin, builtin, "{context}");
+        assert_eq!(
+            predicate.loadout.as_ref().unwrap().id,
+            loadout_id,
+            "{context}"
+        );
+        assert_eq!(
+            predicate.loadout.as_ref().unwrap().builtin,
+            builtin,
+            "{context}"
+        );
         let agent = predicate
             .agents
             .iter()
@@ -1630,9 +1638,15 @@ async fn pinned_run(
         assert_eq!(agent.credential.as_deref(), Some(credential), "{context}");
         assert_eq!(agent.provider, writer.model.provider, "{context}");
         assert_eq!(agent.model, writer.model.model, "{context}");
-        assert_eq!(predicate.sandbox.network, "egress", "{context}");
+        assert_eq!(
+            predicate.sandbox.as_ref().unwrap().network,
+            "egress",
+            "{context}"
+        );
         let session_policy = predicate
             .sandbox
+            .as_ref()
+            .unwrap()
             .policies
             .iter()
             .find(|policy| policy.scope == "session")

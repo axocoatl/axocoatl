@@ -11,7 +11,11 @@ https://docs.axocoatl.ai/start/first-session/. The marketing site shows actual
 1.5 dashboard screenshots and a navigation recording of a completed run, not a
 live model execution. Headless runs remain a separate terminal workflow; opening
 their Session in the dashboard exposes Run outcome, checks, review and a receipt
-when one was produced. Ordinary workbench turns do not produce signed receipts.
+when one was produced. Finished native dashboard turns expose Signed receipt in
+Conversation and History. Download signs retained terminal evidence, including
+the exact turn revision, recorded checks and review, and captured file hashes.
+It never hashes later checkout contents when you download. Checks and review
+remain opt-in through Team & budget. Existing 1.5.0 films predate this feature.
 
 - Isolation built in: every Session's repository tools (file, shell, terminal) run
   in a rootless Podman container (E2B Cloud is an explicit remote option on the

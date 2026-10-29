@@ -136,7 +136,7 @@ Every finding had to come with an executable reproduction that a validator re-ra
 | An example `axocoatl run` summary: a `pages.py` fix "approved after 2 of 3 rounds by ollama:gpt-oss:20b", 412,907 input tokens | `README.md`, marketing home | It was written to show the format; no run printed it. | A summary labelled as the format, not a measurement (see Not measured). |
 | "A local writer. A stronger reviewer." and "a local writer can be reviewed by a stronger model" for the setup the commands use | marketing home, `README.md`, `llms.txt`, docs index card, `configure/cross-model-review` (also "Bigger local model", "Strong reviewer") | The commands' reviewer, `gpt-oss:20b`, is smaller than the 30B writer and unmeasured; only the gpt-oss 120B reviewer was measured (R2, R7). | "A different reviewer"; the measured 120B results keep their wording. |
 | "If the project stopped tomorrow, the executable you have would keep running" | marketing why page | 1.4.0 refused the Ollama Homebrew installed within days, because native Ollama Sessions accepted only the audited release line; 1.5.0 still refuses a new major Ollama release. | "Your receipts keep verifying offline with the executable you have" and the Ollama version policy as it is: 0.40.6 and later 0.x releases, a newer minor only through the contract probes, a new major release needing a newer Axocoatl. |
-| `axocoatl run` "from a shell or a CI job", and "every finished run gets a receipt" | docs index, `configure/loadouts`, marketing install, `README.md`, `llms.txt`, marketing home and concepts | When it was withdrawn, no hosted CI runner had run `axocoatl run`. The 1.5.0 release gate's CI leg now runs it on GitHub's Ubuntu runners, but only against a scripted model server, so a CI job with real models is still not verified. Workbench turns get no receipt. | "From your shell"; loadout receipts are verified separately. A pre-admission refusal has none; signing/storage failure records `receipt_unavailable` without changing the run verdict. |
+| `axocoatl run` "from a shell or a CI job", and "every finished run gets a receipt" | docs index, `configure/loadouts`, marketing install, `README.md`, `llms.txt`, marketing home and concepts | When it was withdrawn, no hosted CI runner had run `axocoatl run`. The 1.5.0 release gate's CI leg now runs it on GitHub's Ubuntu runners, but only against a scripted model server, so a CI job with real models is still not verified. Workbench turns in those releases got no receipt. | "From your shell"; loadout receipts are verified separately. A pre-admission refusal has none; signing/storage failure records `receipt_unavailable` without changing the run verdict. |
 | A hosted reviewer through OpenRouter presented as part of the measured cross-model result | docs `configure/cross-model-review` (description and introduction), `understand/what-we-measured` ("How this maps to Axocoatl"), docs index card, `README.md` and `llms.txt` measured sections, marketing home and concepts pages | The measured cross-model result (R2, R7) used a local gpt-oss 120B reviewer. No OpenRouter reviewer was measured. | How to configure an OpenRouter reviewer stays documented; every page that cites the measured result says the reviewer was local and that OpenRouter reviewers were not measured. |
 
 ## Public copy corrections (2026-10-27)
@@ -172,7 +172,7 @@ implementation:
   one native OpenRouter GPT-OSS 120B Agent, no helpers, required review or host-run
   required checks. They are distinct from the local headless run on the homepage.
   Captions do not present the Agent's test claim as a host-enforced check or add a
-  receipt to an ordinary Session.
+  receipt to that historical Session.
 
 ## Receipt capture wording correction (2026-10-28)
 
@@ -193,6 +193,22 @@ and suppresses receipt reads whenever the final Outcome records
 this correction;
 the original demonstrated receipt's valid signature and covered-file result do not
 establish that restart behavior was correct.
+
+## Native dashboard turn receipts (2026-10-29)
+
+The new native receipt path exposes **Signed receipt** beneath a finished dashboard
+turn and in History. Download signs retained terminal turn evidence on request and
+binds the statement to the turn, its revision and graph revision. It does not read current
+checkout bytes when someone downloads a receipt later. Required checks and review
+remain opt-in and are recorded according to what actually ran; a signature does not
+make an unconfigured check pass. Missing captured hashes remain incomplete.
+
+The supporting product-seam regression starts the request with the visible
+Conversation Send control, runs a real repository edit and host check against a
+scripted provider, downloads the actual receipt and checks its signature and files
+with the offline CLI. That is a mechanism regression, not model-quality evidence.
+Existing 1.5.0 recordings and their provenance remain historical and are not
+relabelled as demonstrations of this added receipt path.
 
 ## Not measured
 

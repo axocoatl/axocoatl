@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Signed receipts for finished native dashboard Session turns. Conversation and
+  History expose the download beside the request, with retained check, review,
+  model and captured-file evidence verifiable offline against a trusted key.
+  Turn identity and revision distinguish these receipts from loadout runs.
+
+### Documentation
+- Document the dashboard receipt workflow in the first-Session guide, README and
+  public sites, while preserving the version and scope of existing recordings.
+
 ## [1.5.1] - 2026-10-28
 
 ### Fixed

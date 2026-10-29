@@ -21,9 +21,11 @@ change from Qwen3-Coder 30B to GPT-OSS 20B. The final files preserve all four or
 tests, add the requested regressions and pass independent checks. This is one
 prepared fixture, not a model comparison.
 
-Ordinary Session turns keep their evidence in History and do not issue run receipts.
-The separate saved-run tour shows a CLI-launched fix with required checks, review
-and a signed receipt.
+For finished native Session turns, open **Signed receipt** in Conversation or History.
+Download signs the retained turn evidence so you can verify its recorded checks, review
+and captured files offline. The
+recordings above predate dashboard receipts; the separate saved-run tour shows a
+CLI-launched fix with required checks, review and a signed receipt.
 
 <details>
 <summary><strong>See the saved run's actual diff, checks and receipt</strong></summary>
@@ -69,6 +71,8 @@ instead of starting another copy.
 2. Create a **New session**, review its environment, and apply **Team & budget**.
 3. Ask for one concrete change. Follow the work in Conversation, then inspect
    **Files → Source Control → Last turn** before committing.
+4. Choose **Download signed receipt** beneath the finished turn to retain its
+   evidence for offline verification.
 
 Onboarding configures this OS user; it creates no project or repository. It asks
 before installing Podman and, on macOS, creating its virtual machine. Verified
@@ -82,7 +86,7 @@ verified end to end. [Requirements and setup →](https://docs.axocoatl.ai/start
 | **Start** | Ask in Conversation | Run a built-in fix loadout from your shell |
 | **Writer** | Ollama or OpenRouter | Claude Code, Codex, Ollama or OpenRouter |
 | **Checks and review** | Opt in through Team & budget | Required by the built-in fix loadouts |
-| **Inspect** | Files, Git diff, tool calls and History | The same dashboard, plus Run outcome and a signed receipt |
+| **Inspect** | Files, Git diff, tool calls, History and a signed turn receipt | The same dashboard, plus Run outcome and a signed run receipt |
 
 A new Session starts with one Agent. Add read-only helpers or explore several
 Ways when the task calls for them. Helpers and review cost extra tokens. [Session guide →](https://docs.axocoatl.ai/workbench/session/)

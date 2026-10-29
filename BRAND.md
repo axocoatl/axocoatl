@@ -6,7 +6,7 @@ page, doc, or post conflicts with current product fact, fix the fact source and 
 file together. The goal is consistency that compounds: every page reinforces every
 other page, and a year from now we still sound like ourselves.
 
-Last updated: 2026-10-27 (claim scope and first-run copy; receipt positioning retained).
+Last updated: 2026-10-29 (dashboard turn receipts; receipt positioning retained).
 
 ---
 
@@ -53,7 +53,8 @@ is correct, that the tests are good tests or that the review was right, and a ke
 copied from a data directory signs as well as the original. Never call a receipt
 "tamper-proof", "proof the code works" or a guarantee; say what it holds and which key signed
 it. Do not promise that every run has a receipt: pre-admission refusals have none,
-workbench turns do not produce one, and signing/storage failure records
+native dashboard turns sign retained evidence when the person downloads it, and
+loadout signing/storage failure records
 `receipt_unavailable` without changing the run verdict. Likewise, required checks
 and review describe the fix family or an explicitly configured team, not every
 loadout. QA and audit have their own acceptance rules. Onboarding requires different
@@ -90,7 +91,9 @@ workbench. Show the request, changed files, checks, review and available receipt
 the actual UI. Terminal commands belong in installation instructions and command
 references, not in a substitute product demo. Captures must name their real version
 and workflow; never turn a headless run into a claim that the dashboard launched it,
-or imply that an ordinary Session produces a signed receipt. A tour of saved work
+or present an older recording as evidence of a newly added capability. Finished
+native dashboard turns now expose signed receipts; retain each capture's actual
+version and workflow. A tour of saved work
 must be labelled as such rather than presented as live model execution.
 
 Public product videos and their poster frames must use the app's explicit **Dark**

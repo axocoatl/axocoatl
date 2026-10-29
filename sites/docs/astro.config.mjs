@@ -87,6 +87,7 @@ export default defineConfig({
             { label: 'Files, Preview, and Terminal', slug: 'workbench/tools' },
             { label: 'Explore several Ways', slug: 'workbench/ways' },
             { label: 'Review Git and Last turn', slug: 'workbench/git' },
+            { label: 'Signed receipts', slug: 'workbench/receipts' },
             { label: 'Context, History, and Stop', slug: 'workbench/history' },
           ],
         },
@@ -96,7 +97,6 @@ export default defineConfig({
             { label: 'Run a fix from the terminal', slug: 'start/first-fix' },
             { label: 'Fix, QA and audit runs', slug: 'workbench/fix-qa-audit' },
             { label: 'Keep as PR', slug: 'workbench/keep-as-pr' },
-            { label: 'Signed receipts', slug: 'workbench/receipts' },
             // Pages that live under Configure, linked here too; their slugs stay put.
             { label: 'Loadouts', link: '/configure/loadouts/' },
             { label: 'Repository toolchains', link: '/configure/toolchains/' },

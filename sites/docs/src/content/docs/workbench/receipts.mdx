@@ -1,11 +1,12 @@
 ---
 title: Signed receipts
-description: Inspect a loadout run's signed statement of its changed files, enforced checks and verdict. Verify it offline against a trusted key, with the limits of admission, signing and file coverage explicit.
+description: Download a dashboard turn or loadout run receipt and verify its recorded evidence and captured files offline against a trusted key.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-When a [loadout run](/reference/run/) finishes, the daemon signs a **receipt**: a small
+A finished native dashboard turn or [loadout run](/reference/run/) can produce a
+**receipt**: a small
 statement of what the run did and what the host observed, signed with an Ed25519 key that
 lives in this computer's data directory. You can hand the receipt to someone who did not
 watch the run, such as a reviewer of the pull request [Keep as PR](/workbench/keep-as-pr/)
@@ -16,11 +17,23 @@ The receipt identifies when its file hashes were captured and any coverage limit
 Some receipts or individual paths use files read at finish rather than the tree the
 checks ran on; inspect `files.source` and `files.read_at_finish` as described below.
 
-A run refused before admission has no receipt. When signing fails, the outcome reports
+A run refused before admission has no receipt. When loadout signing fails, the outcome reports
 `receipt_unavailable`; a passing run alone does not establish that a receipt exists.
-Ordinary workbench turns do not issue run receipts. [Verify the receipt and its
-covered files](/start/first-fix/#4-inspect-the-outcome-and-verify-the-receipt) before
-relying on it.
+For a native dashboard turn, the **Signed receipt** card below the finished turn
+and in **History → Signed receipt** offers **Download signed receipt**. Choosing
+Download signs retained terminal turn evidence, including its exact revision; it never hashes your current checkout
+at download time. A running turn or one that still needs attention is not a finished
+receipt. A signing or storage failure is shown as unavailable rather than as success.
+
+Dashboard receipts identify `native_turn` instead of `loadout`. Their checks and
+review reflect the requirements you applied in **Team & budget**. Without those
+requirements, a receipt does not invent a test pass or reviewer approval. Missing
+capture hashes remain explicitly incomplete rather than reading later file contents.
+Fields not retained for the turn, such as historical sandbox policy, are identified
+in `native_turn.limitations`; an absent field is not a claim of zero activity.
+
+[Verify the receipt and its covered files](#verifying-a-receipt)
+before relying on it.
 
 ## What it is
 
@@ -38,7 +51,9 @@ pre-authentication encoding of the statement's exact bytes.
   - `repository`: the commit the run started from, the paths that had uncommitted changes
     then, and the `origin` remote as `https://host/path` without credentials (absent when
     there is none or it is a local path);
-  - `loadout`: id, version, kind, digest, built-in or yours;
+  - `loadout`: id, version, kind, digest, built-in or yours, for loadout runs;
+  - `native_turn`: the exact turn, turn revision, graph revision and digest of retained
+    evidence, for dashboard turns;
   - `agents`: each Agent's id, role, runtime (`native`, `claude-code`, `codex`), its
     `program_version` (the pinned version of an external writer; for a native Agent the
     Ollama that served its calls, `ollama 0.40.6`, or the OpenRouter endpoints that
@@ -75,6 +90,13 @@ pre-authentication encoding of the statement's exact bytes.
   - `signer`: the algorithm, public key and key id, so a verifier can tell a valid
     signature by an unknown key from a broken one. Trust never comes from this field.
 
+Native turn receipts use the same envelope but only include facts retained for that
+turn. They omit historical sandbox settings, network totals, program versions and
+the exact finish time. Their empty `dirty_paths` does not establish a clean starting
+checkout, and a missing check timeout does not mean a zero timeout. Usage is an
+incomplete activation subtotal, not a billing record. Read `native_turn.limitations`
+with the fields above.
+
 `files.source` says when the digests were taken:
 
 | `files.source` | The digests are the files |
@@ -88,11 +110,14 @@ that differs from `HEAD` in the tree it captured (and its whole manifest too, in
 repository small enough, roughly 80 files). That record is bounded by the changed paths:
 up to 10,000 of them, and only while the capture's output, with its patch, stays within
 768 KiB. A capture past that bound, or one made by a check group admitted with 1.3's
-capture command, records no digests, and the source is then `workspace_at_finish`.
+capture command, records no digests. Loadout receipts can then use
+`workspace_at_finish`; native turn receipts retain incomplete coverage instead.
 
-A path the run changed back to what it is in `HEAD` is not in that record. Its digest is
-read when the run finishes, and the path is named under `files.read_at_finish`, so a
-verifier knows which subjects were not taken from the judged tree.
+A path the run changed back to what it is in `HEAD` is not in that record. A loadout
+receipt can read its digest when the run finishes and name it under
+`files.read_at_finish`, so a verifier knows it was not taken from the judged tree. A
+native turn receipt cannot recover a missing digest this way; it reports incomplete
+coverage.
 
 A path the run changed inside Git's own
 directory, a path that is not a file or a link (a directory, a path under a symbolic
@@ -139,7 +164,26 @@ Signing key** shows the same line with a Copy button, as does
 key signed still verify with the old line; keep it in a trusted-keys file as long as you
 want those receipts accepted.
 
-## Getting a run's receipt
+## Downloading a dashboard turn's receipt
+
+Choose **Download signed receipt** below the finished native turn, or open
+**History → Signed receipt** for that turn. The download filename includes its turn
+id. Keep that filename or rename it to `turn.receipt.json` for the command below.
+
+Use an Axocoatl verifier that supports native turn receipts; releases through 1.5.1
+require a loadout identity and cannot read this new provenance. Use the signing
+computer's trusted public key, obtained separately from the receipt itself.
+
+```sh
+axocoatl receipt verify turn.receipt.json --key "$(axocoatl receipt key)" --repo .
+```
+
+Run this in the repository whose files you are checking, using the daemon's config
+and data directory for `receipt key`. A key embedded in a downloaded receipt is not
+a trusted key by itself. For another computer's receipt, use a key line received
+from its operator. Native turn receipts do not require a headless run's record bundle.
+
+## Getting a loadout run's receipt
 
 - `axocoatl run … --receipt run.receipt.json` writes it when the run finishes, whatever
   the verdict, like `--junit` and `--record`. A run that was never admitted has nothing to
@@ -166,8 +210,11 @@ are again unchanged.
 
 ```sh
 axocoatl receipt key > trusted-keys     # this computer's key; add the lines of others you trust
-axocoatl receipt verify run.receipt.json --keys trusted-keys --repo . --record run.axorecord.jsonl
+axocoatl receipt verify run.receipt.json --keys trusted-keys --repo .
 ```
+
+For a loadout run, add `--record run.axorecord.jsonl` when you also have its record
+bundle and want to check that bundle.
 
 To check a receipt this computer signed, `--key "$(axocoatl receipt key)"` does the same
 without a file:
@@ -228,6 +275,11 @@ verify) and the receipt block at its end, which the description's length limit n
 cuts.
 
 ## Checking pull requests in GitHub Actions
+
+The pinned examples below verify **loadout run receipts** using the older verifier
+selected by the action. They do not establish support for native dashboard receipts.
+To verify a native turn receipt in CI, use a current native-receipt-capable binary
+and the offline command above with a trusted key supplied by the base branch.
 
 `axocoatl/axocoatl/actions/verify-receipt` is a composite action that checks the receipt a
 pull request's description carries, the way Keep as PR puts it there. Both are for GitHub

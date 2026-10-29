@@ -14,8 +14,11 @@ checks on the exact final files. An exit code reports the outcome; a signed rece
 lets someone verify the recorded facts and covered files offline (receipt positioning
 approved 2026-10-14, claim scope clarified 2026-10-27; `BRAND.md`).
 Required review is a fix-loadout or configured-team contract, not a property of every
-loadout. Workbench turns and pre-admission refusals have no receipt. If signing or
-storage fails after an admitted run finishes, the Outcome records
+loadout. Finished native dashboard turns expose a signed receipt of their retained
+turn evidence in Conversation and History; Download signs that retained evidence
+on request. Checks and review remain opt-in through Team & budget; a receipt does
+not imply either was required. Pre-admission refusals have no receipt. If signing
+or storage fails after an admitted loadout run finishes, the Outcome records
 `receipt_unavailable` without changing its verdict; verify the receipt separately.
 Behind the receipt are three pillars, stated as evidence rather than as the pitch:
 isolation built in, a complete record of every step, and any model per Agent, local or
@@ -58,9 +61,10 @@ merely because it exists in the current working directory.
 The website and first-run documentation show the browser workbench through actual
 screenshots and UI recordings. The primary entry is installation, onboarding, then
 **Open workspace…** and a Session. Command-line runs remain documented as a separate
-headless workflow. A loadout-created Session exposes its checks, required review,
-record and signed receipt in **Run outcome**; this does not make the UI a loadout
-launcher or add receipts to ordinary workbench turns.
+headless workflow. Finished native dashboard turns expose **Signed receipt** in
+Conversation and History, with **Download signed receipt** for offline verification.
+A loadout-created Session exposes its checks, required review, record and signed
+receipt in **Run outcome**. These remain separate execution paths in the same app.
 
 ## The primary loop
 
@@ -81,7 +85,9 @@ launcher or add receipts to ordinary workbench turns.
    **Checks**, and use **Judge** when useful.
 6. If several Ways ran, choose **Keep this one**. The selected changes return to the session
    checkout and the other attempts are cleaned up.
-7. Review **Last turn** through Git, stage or discard deliberately, and commit.
+7. For a finished native turn, inspect **Signed receipt** beneath it and download
+   its recorded facts and captured file hashes. Review **Last turn** through Git, stage or discard
+   deliberately, and commit.
 
 Native Sessions retain a Ways decision after Keep or finishing without keeping. Configure
 explicit History storage limits before starting Ways. The record keeps each candidate's

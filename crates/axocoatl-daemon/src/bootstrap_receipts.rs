@@ -24,6 +24,10 @@ use axocoatl_session::run_outcome::RunOutcome;
 use axocoatl_session::run_record::{RunEvent, RunManifest};
 use axocoatl_session::session_history::SessionHistoryEntry;
 
+#[path = "bootstrap_native_receipts.rs"]
+mod native;
+pub use native::{NativeReceiptChecks, NativeReceiptReview, NativeTurnReceiptStatus};
+
 /// Network-record events read per page.
 const POLICY_PAGE: usize = 1000;
 
@@ -347,7 +351,7 @@ impl AxocoatlDaemon {
                 run_id: manifest.run_id.clone(),
                 session_id: manifest.session_id.clone(),
                 started_at_ms: outcome.started_at_ms,
-                finished_at_ms: outcome.finished_at_ms,
+                finished_at_ms: Some(outcome.finished_at_ms),
                 axocoatl_version: env!("CARGO_PKG_VERSION").into(),
                 task_sha256: sha256_hex(manifest.task.as_bytes()),
             },
@@ -356,15 +360,16 @@ impl AxocoatlDaemon {
                 dirty_paths: manifest.dirty_paths.clone(),
                 origin_url: origin_url(std::path::Path::new(&manifest.repo)).await,
             },
-            loadout: LoadoutFacts {
+            loadout: Some(LoadoutFacts {
                 id: manifest.loadout.id.clone(),
                 version: manifest.loadout.version,
                 kind: manifest.loadout.kind.clone(),
                 digest: manifest.loadout.digest.clone(),
                 builtin: manifest.loadout.builtin,
-            },
+            }),
+            native_turn: None,
             agents,
-            sandbox: SandboxFacts {
+            sandbox: Some(SandboxFacts {
                 backend: self.config.sandbox.backend.clone(),
                 network,
                 workload: "hardened".into(),
@@ -381,8 +386,8 @@ impl AxocoatlDaemon {
                     .get_session(&manifest.session_id)
                     .await
                     .and_then(|session| session.environment.resource_limits),
-            },
-            network: outcome.network.clone(),
+            }),
+            network: Some(outcome.network.clone()),
             checks: outcome
                 .checks
                 .iter()
@@ -390,7 +395,7 @@ impl AxocoatlDaemon {
                     name: check.name.clone(),
                     state: serde_name(&check.state),
                     exit_code: check.exit_code,
-                    timeout_ms: check.timeout_ms,
+                    timeout_ms: Some(check.timeout_ms),
                     argv: check.argv.clone(),
                     candidate_sha256: check.candidate_sha256.clone(),
                 })

@@ -32,7 +32,7 @@ fn statement(signer: &receipt_key::SigningKey) -> Statement {
                 run_id: RUN.into(),
                 session_id: "ses-0c1d0000-0000-4000-8000-000000000002".into(),
                 started_at_ms: 1,
-                finished_at_ms: 2,
+                finished_at_ms: Some(2),
                 axocoatl_version: "1.4.0".into(),
                 task_sha256: sha256_hex(b"fix add"),
             },
@@ -41,13 +41,14 @@ fn statement(signer: &receipt_key::SigningKey) -> Statement {
                 dirty_paths: Vec::new(),
                 origin_url: None,
             },
-            loadout: LoadoutFacts {
+            loadout: Some(LoadoutFacts {
                 id: "fix".into(),
                 version: 1,
                 kind: "fix".into(),
                 digest: "b".repeat(64),
                 builtin: true,
-            },
+            }),
+            native_turn: None,
             agents: vec![AgentFacts {
                 id: "writer".into(),
                 role: "writer".into(),
@@ -57,7 +58,7 @@ fn statement(signer: &receipt_key::SigningKey) -> Statement {
                 model: "qwen3-coder:30b".into(),
                 credential: None,
             }],
-            sandbox: SandboxFacts {
+            sandbox: Some(SandboxFacts {
                 backend: "podman".into(),
                 network: "egress".into(),
                 workload: "hardened".into(),
@@ -70,13 +71,13 @@ fn statement(signer: &receipt_key::SigningKey) -> Statement {
                 }],
                 environment: None,
                 limits: None,
-            },
-            network: NetworkSummary::default(),
+            }),
+            network: Some(NetworkSummary::default()),
             checks: vec![CheckFacts {
                 name: "tests".into(),
                 state: "passed".into(),
                 exit_code: Some(0),
-                timeout_ms: 180_000,
+                timeout_ms: Some(180_000),
                 argv: vec!["python3".into(), "-m".into(), "pytest".into()],
                 candidate_sha256: Some("d".repeat(64)),
             }],
