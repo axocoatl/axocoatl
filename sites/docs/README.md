@@ -18,23 +18,24 @@ npm run preview
 ```
 
 `prebuild.sh` copies the canonical brand assets from `branding/` into generated
-`public/` output before a build. It also copies `dashboard-task.mp4`, `result.jpg`,
-`captions.vtt` and `chapters.vtt` from
-`sites/marketing/assets/demo/dashboard-task-1.5/` into the ignored
-`public/assets/dashboard-task-1.5/` folder. Do not edit these generated copies.
-The video, poster and text tracks are served from the docs origin; links to the
-recording's provenance and artifact evidence use the canonical marketing site.
+`public/` output before a build. It also copies the full 1.5.3 dashboard walkthrough,
+review excerpt and receipt excerpt from
+`sites/marketing/assets/demo/dashboard-flow-1.5.3/` into the ignored
+`public/assets/dashboard-flow-1.5.3/` folder. Each clip has an MP4, a JPG poster,
+captions and chapter tracks. Do not edit these generated copies. The recordings
+and text tracks are served from the docs origin; provenance and artifact-evidence
+links use the canonical marketing site.
 
 The built-link check verifies internal `href`, `src` and `poster` targets and fails
-when the canonical favicon was not copied into `dist/`. It also requires all four
-built task-media files to match their canonical source bytes and the SHA-256 and
-size entries in the canonical `provenance.json`. These inexpensive file checks do
-not repeat the source-frame decoding already performed by the marketing media gate.
+when the canonical favicon was not copied into `dist/`. It also requires all 12
+built media files to match their canonical bytes and the SHA-256 and size entries
+in `provenance.json`. These inexpensive checks do not repeat source-frame decoding
+performed by the marketing media gate.
 
-The first-Session guide's timestamp buttons use the shared chapter module from
+The first-Session, required-review and receipt guides use the shared chapter module from
 `sites/marketing/components/ax-video-chapters.js`. Prebuild copies it to the ignored
 `public/assets/ax-video-chapters.js`; the built checker requires byte identity with
-the canonical module. The adjacent written-step links remain ordinary guide links.
+the canonical module. Exact chapter times come from the canonical `integration.json`.
 
 ## Dependency audit exceptions
 

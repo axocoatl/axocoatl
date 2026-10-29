@@ -10,6 +10,7 @@ on:
       - 'sites/docs/**'
       - 'sites/marketing/assets/demo/dashboard-task-1.5/**'
       - 'sites/marketing/assets/demo/required-review-1.5/**'
+      - 'sites/marketing/assets/demo/dashboard-flow-1.5.3/**'
       - 'sites/marketing/components/ax-video-chapters.js'
       - 'docs/**'
       - 'branding/**'

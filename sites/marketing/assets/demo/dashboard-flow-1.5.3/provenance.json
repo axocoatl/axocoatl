@@ -1,0 +1,393 @@
+{
+  "recorded_at": "2026-10-29T23:05:03.172Z",
+  "product": {
+    "name": "Axocoatl",
+    "version": "1.5.3",
+    "release_commit": "c14e3957cd0a8cfd9e76480f724e902ada0f5aa4",
+    "binary_sha256": "feeb6eb174c7eefd1cea83c8a008bb658944ed8202c5c3e379c4b7dc49676919",
+    "session_id": "ses-86495386-4893-4f03-ac87-6e7961ee9a69",
+    "turn_ids": [
+      "turn-3e0089b0-b990-4556-b0c5-1b919f3d1562",
+      "turn-e13aa2bd-f2bf-42e8-bf7f-a5c52920d825"
+    ]
+  },
+  "capture": {
+    "theme": "dark",
+    "human_operator": false,
+    "operator": "Codex browser automation in a dedicated release-test window",
+    "surface": "Released embedded dashboard",
+    "viewport": [
+      1488,
+      981
+    ],
+    "reported_viewport": [
+      1488,
+      980
+    ],
+    "method": "Original browser screenshots captured in short chronological segments at approximately two samples per second"
+  },
+  "presentation": {
+    "new_inference": true,
+    "run_started_from": "dashboard",
+    "kind": "Edited recording of one task with a failed first turn and a corrective turn",
+    "realtime": false,
+    "editing": "Uncaptured navigation/operator gaps removed. Declared waiting segments accelerated four times; all captured samples retained in order. No fabricated UI, motion interpolation, or substituted outcomes.",
+    "comparison": "No single-agent control or superiority claim is made."
+  },
+  "task": {
+    "title": "Fix pagination and keep the receipt",
+    "initial_request": "Fix pagination dropping the final partial page. Preserve the public API and all existing tests. Add regression tests for one item and page size one. Run npm test, inspect the diff, and do not commit.",
+    "corrective_request_summary": "Restore the original invalid-size test unchanged from Git HEAD. Keep the pagination fix and all original tests, add separate one-item/larger-page and multiple-item/page-size-one regressions, preserve the API, rerun tests, inspect the full diff, and do not commit."
+  },
+  "effective_configuration": {
+    "agents": [
+      {
+        "id": "team-node-90ffa89a9f28d7ee36b166d1",
+        "role": "Autonomous",
+        "runtime": "native",
+        "provider": "ollama",
+        "model": "gpt-oss:20b"
+      },
+      {
+        "id": "required-review",
+        "role": "Worker",
+        "runtime": "native",
+        "provider": "ollama",
+        "model": "qwen3-coder:30b"
+      }
+    ],
+    "review": {
+      "provider": "ollama",
+      "model": "qwen3-coder:30b",
+      "runtime": "native",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 2,
+      "max_rounds": 2,
+      "findings": 2
+    },
+    "required_checks": [
+      {
+        "name": "check-1",
+        "state": "passed",
+        "exit_code": 0,
+        "argv": [
+          "sh",
+          "-c",
+          "npm run test"
+        ],
+        "candidate_sha256": "c7a1b0b5be53ace43f08897af9f7a7adbe32d9b4d194d230f04555163f471b24"
+      }
+    ],
+    "note": "The existing Session retained its frozen Qwen reviewer definition in both turns, despite an attempted offscreen configuration change."
+  },
+  "outcome": {
+    "status": "accepted",
+    "initial_turn": "The source fix was retained as a partial result; an existing test had been replaced and Qwen review failed after two malformed tool responses.",
+    "final_turn": "The corrective turn completed after passing host checks and Qwen approval in round 2 of 2. Independent assessment confirmed the requested behavior, all original tests, added boundary regressions, unchanged API and no commit.",
+    "receipt_scope": "Each receipt covers its own turn. The final receipt covers test/paginate.test.js; the earlier partial receipt covers src/paginate.js and the earlier test file. Neither represents the entire Session as one approved receipt.",
+    "independent_evidence": "artifact-evidence.json"
+  },
+  "interventions": [
+    {
+      "kind": "automation_locator",
+      "description": "The Required checks disclosure is an accessibility button but did not match Playwright button role; refreshed accessibility state before retargeting.",
+      "source_ms": 127235
+    },
+    {
+      "kind": "failed_first_turn",
+      "description": "Qwen emitted incomplete tool-call markup twice. The operator retained a partial result and downloaded its failed-review receipt.",
+      "source_ms": 479547
+    },
+    {
+      "kind": "offscreen_configuration_attempt",
+      "description": "The operator attempted to change the reviewer model and restarted the daemon. One boot was refused because a separate headless same-model configuration was invalid; the headless configuration was restored. This did not change the existing Session's frozen Qwen reviewer.",
+      "source_ms": 563148
+    },
+    {
+      "kind": "corrective_request",
+      "description": "The operator identified the removed original test and submitted a corrective request through the dashboard.",
+      "source_ms": 643373
+    }
+  ],
+  "limits": [
+    "This is one recovered task, not a comparative benchmark or proof that every task succeeds.",
+    "A receipt signature protects signed content and identifies its signing key; it does not establish that the change is correct.",
+    "The signer, receipt coverage, and historical limits are preserved in the actual downloaded receipt."
+  ],
+  "schema": "axocoatl.dashboard-flow-provenance/1",
+  "files": [
+    {
+      "file": "integration.json",
+      "sha256": "70b2809b36d5c9ccc5e916aea5d4b582e82f6a7fc9d5a31f0f517054b33108fc",
+      "bytes": 3208
+    },
+    {
+      "file": "timeline.json",
+      "sha256": "7df94f7ad21c93289d6a193af1dd6ead254865d5a489b9c0f763b305e91b4997",
+      "bytes": 702429
+    },
+    {
+      "file": "artifact-evidence.json",
+      "sha256": "a0c4835313e87fd59e313d8cbc8f3497c4b981761b01453a31374bac1d976b3a",
+      "bytes": 22201
+    },
+    {
+      "file": "receipt.dsse.json",
+      "sha256": "c8a05d3cad1d9a90626ff0228fa233da723e39ec22910d2e0942cdc92d5729b6",
+      "bytes": 3816
+    },
+    {
+      "file": "receipt-verification.json",
+      "sha256": "4f823c0cd4b567188999c72b5148ba9e810ff96bfb719530229f1cc56c2425e3",
+      "bytes": 1900
+    },
+    {
+      "file": "assemble-media.py",
+      "sha256": "d0bc74c61408884c730c8f1f6b627c6996f43d8e0511d00c663eccd4eae6e30c",
+      "bytes": 19033
+    },
+    {
+      "file": "verify-media.mjs",
+      "sha256": "0d6bac96357e7549f71782ef8b072a92441dc33da080382078f5fc32cc430b6c",
+      "bytes": 18828
+    },
+    {
+      "file": "ASSEMBLY.md",
+      "sha256": "6e6d395229d0121a7e987d94b7634179249dec70e4a3d1c18141302fbc0870c5",
+      "bytes": 5378
+    },
+    {
+      "file": "prior-receipt-01.dsse.json",
+      "sha256": "e9ccbd9ebd6307a0ec0ccf2c041c1ade3b52420b3e21336992f7a887f8c23e12",
+      "bytes": 4024
+    },
+    {
+      "file": "source-001.tar.gz",
+      "sha256": "09f05ffc72a79b25d20aa675cd795579a9327e39b7ed44ce5e065d693b9ed110",
+      "bytes": 15775251
+    },
+    {
+      "file": "source-002.tar.gz",
+      "sha256": "822dfb6b398c120015ccad447dda8323a8aa918c14502e0d8508ad84b35a13f0",
+      "bytes": 13355068
+    },
+    {
+      "file": "source-003.tar.gz",
+      "sha256": "b882da0bb7e8551777491705ab3aab39197ea551e603d60afc3e882ae3cd2b6d",
+      "bytes": 8394853
+    },
+    {
+      "file": "dashboard-flow.mp4",
+      "sha256": "2c2a05280952820d1e083bb62ac33ddb9f5897bab274914648d505cc85fc3d9c",
+      "bytes": 3810560
+    },
+    {
+      "file": "dashboard-flow.jpg",
+      "sha256": "858621012210e9784b8ef059ac2f017c67cb1f6c0a62ea4e0a72105a702537f6",
+      "bytes": 86822
+    },
+    {
+      "file": "dashboard-flow.captions.vtt",
+      "sha256": "0638071a9640625617bf9fc71d23d6d7e5c16c9537a1f6ad8b88a999bec7ccf0",
+      "bytes": 2809
+    },
+    {
+      "file": "dashboard-flow.chapters.vtt",
+      "sha256": "1496ea1d54d23898d7056984342b175a224e16a2d6da9112f7a58d909797de38",
+      "bytes": 598
+    },
+    {
+      "file": "review.mp4",
+      "sha256": "4c18762a5f6bcd5f6cbf8eb6775bf27d0f376f90c2c372a35c887b2c39b9c64e",
+      "bytes": 1725178
+    },
+    {
+      "file": "review.jpg",
+      "sha256": "a4508626fffa676ff876263c35ed28441f55ff9842a04dbc175dbb0e9c7fa80c",
+      "bytes": 100827
+    },
+    {
+      "file": "review.captions.vtt",
+      "sha256": "60cb9ad0504193fb37fd5d189fe7969593c4a115238b62234c8f1096e5e7ca2b",
+      "bytes": 1390
+    },
+    {
+      "file": "review.chapters.vtt",
+      "sha256": "8ea681bba3415ee29385e097397b1675ff6cb6701763130e931a1f0f239b29a2",
+      "bytes": 282
+    },
+    {
+      "file": "receipt.mp4",
+      "sha256": "524451edc73b4c8f5cebe27e2c38d8a888914fb4261269686a4db5d4a2df4c7a",
+      "bytes": 813788
+    },
+    {
+      "file": "receipt.jpg",
+      "sha256": "5e0a1e549e9da9047694d4d8bcf322d034d7b276722620f83db133765e5f9ce9",
+      "bytes": 105492
+    },
+    {
+      "file": "receipt.captions.vtt",
+      "sha256": "c51a5e49ae31774f816e77a37e495f088e4a7f1b3375909350eaac1d99b00c03",
+      "bytes": 683
+    },
+    {
+      "file": "receipt.chapters.vtt",
+      "sha256": "ec529c231ca0d01af1a9e1c3868de3041e05f44d1adedf15ae8c77f0d56793a8",
+      "bytes": 331
+    }
+  ],
+  "clips": {
+    "dashboard-flow": {
+      "video": "dashboard-flow.mp4",
+      "poster": "dashboard-flow.jpg",
+      "captions": "dashboard-flow.captions.vtt",
+      "chapterTrack": "dashboard-flow.chapters.vtt",
+      "duration_seconds": 179.06716666666662,
+      "chapters": [
+        {
+          "time_seconds": 0.0,
+          "label": "Open a workspace"
+        },
+        {
+          "time_seconds": 16.548,
+          "label": "Set checks and review"
+        },
+        {
+          "time_seconds": 42.446,
+          "label": "Send the request"
+        },
+        {
+          "time_seconds": 51.36175,
+          "label": "Watch the agents"
+        },
+        {
+          "time_seconds": 57.61625,
+          "label": "Keep the failed attempt"
+        },
+        {
+          "time_seconds": 71.46025,
+          "label": "Request the correction"
+        },
+        {
+          "time_seconds": 98.9835,
+          "label": "Run checks and review again"
+        },
+        {
+          "time_seconds": 128.2355,
+          "label": "Inspect the approved result"
+        },
+        {
+          "time_seconds": 142.4015,
+          "label": "Download the turn receipt"
+        },
+        {
+          "time_seconds": 156.19916666666663,
+          "label": "Inspect the code changes"
+        },
+        {
+          "time_seconds": 173.33816666666664,
+          "label": "Keep the final receipt"
+        }
+      ]
+    },
+    "review": {
+      "video": "review.mp4",
+      "poster": "review.jpg",
+      "captions": "review.captions.vtt",
+      "chapterTrack": "review.chapters.vtt",
+      "duration_seconds": 86.32175,
+      "chapters": [
+        {
+          "time_seconds": 0.0,
+          "label": "Watch the agents"
+        },
+        {
+          "time_seconds": 6.2545,
+          "label": "Keep the failed attempt"
+        },
+        {
+          "time_seconds": 20.0985,
+          "label": "Request the correction"
+        },
+        {
+          "time_seconds": 47.62175,
+          "label": "Run checks and review again"
+        },
+        {
+          "time_seconds": 76.87375,
+          "label": "Inspect the approved result"
+        }
+      ]
+    },
+    "receipt": {
+      "video": "receipt.mp4",
+      "poster": "receipt.jpg",
+      "captions": "receipt.captions.vtt",
+      "chapterTrack": "receipt.chapters.vtt",
+      "duration_seconds": 36.66566666666663,
+      "chapters": [
+        {
+          "time_seconds": 0.0,
+          "label": "The completed turn"
+        },
+        {
+          "time_seconds": 2.025666666666628,
+          "label": "Download the receipt"
+        },
+        {
+          "time_seconds": 8.010666666666628,
+          "label": "Understand its coverage"
+        },
+        {
+          "time_seconds": 13.797666666666627,
+          "label": "Inspect the source change"
+        },
+        {
+          "time_seconds": 24.77466666666663,
+          "label": "Inspect the test change"
+        },
+        {
+          "time_seconds": 30.93666666666663,
+          "label": "Keep the signed receipt"
+        }
+      ]
+    }
+  },
+  "source_archives": [
+    "source-001.tar.gz",
+    "source-002.tar.gz",
+    "source-003.tar.gz"
+  ],
+  "prior_receipts": [
+    "prior-receipt-01.dsse.json"
+  ],
+  "source_frames": 695,
+  "actual_duration_ms": 1057625,
+  "encoding": {
+    "codec": "h264",
+    "pixel_format": "yuv420p",
+    "fps": 24,
+    "audio": false,
+    "dimensions": [
+      1488,
+      982
+    ],
+    "source_dimensions": [
+      1488,
+      981
+    ],
+    "padding": {
+      "left": 0,
+      "top": 0,
+      "right": 0,
+      "bottom": 1,
+      "color": "black",
+      "reason": "H.264 YUV420p requires even dimensions; every original dashboard pixel remains unchanged before encoding."
+    },
+    "frames": "Chronological original screenshot samples; repeated frames only. No fabricated UI or motion interpolation.",
+    "edits": "Recorded gaps removed, declared waits accelerated, and short samples held for one encoded frame; inspect timeline.json.",
+    "encoder_sha256": "d0bc74c61408884c730c8f1f6b627c6996f43d8e0511d00c663eccd4eae6e30c"
+  }
+}

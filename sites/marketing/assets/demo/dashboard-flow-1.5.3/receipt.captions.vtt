@@ -1,0 +1,16 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:08.011
+Download the signed receipt for this turn. It records observed checks, review, and covered file hashes.
+
+00:00:08.011 --> 00:00:12.731
+This receipt covers the corrective turn's test file. It does not cover the whole session or prove the change correct.
+
+00:00:12.731 --> 00:00:24.200
+Inspect the pagination source diff in Files. The earlier partial turn produced this source change.
+
+00:00:24.200 --> 00:00:30.937
+Inspect the test diff: the original tests remain and separate boundary regressions are present.
+
+00:00:30.937 --> 00:00:36.666
+Download the final turn receipt. The first turn's source/test receipt is also retained in the evidence.

@@ -35,13 +35,12 @@ if (!fs.existsSync(path.join(distRoot, 'favicon.png'))) {
 
 // Serve the recordings and tracks from the docs origin, retaining the exact
 // already-verified canonical bytes. Frame decoding belongs to the media gate.
-const recordings = [
-  { directory: 'dashboard-task-1.5', label: 'dashboard task',
-    schema: 'axocoatl.dashboard-task-provenance/1', video: 'dashboard-task.mp4' },
-  { directory: 'required-review-1.5', label: 'required review',
-    schema: 'axocoatl.required-review-provenance/1', video: 'required-review.mp4' },
-];
-const sharedMediaFiles = ['result.jpg', 'captions.vtt', 'chapters.vtt'];
+const recordings = ['dashboard-flow', 'review', 'receipt'].map((clip) => ({
+  directory: 'dashboard-flow-1.5.3',
+  label: clip,
+  schema: 'axocoatl.dashboard-flow-provenance/1',
+  files: [`${clip}.mp4`, `${clip}.jpg`, `${clip}.captions.vtt`, `${clip}.chapters.vtt`],
+}));
 
 function readMedia(file) {
   try {
@@ -71,7 +70,7 @@ for (const recording of recordings) {
     }
   }
 
-  for (const name of [recording.video, ...sharedMediaFiles]) {
+  for (const name of recording.files) {
     const source = readMedia(path.join(canonicalRoot, name));
     const built = readMedia(path.join(builtRoot, name));
     const entries = provenance?.files.filter((entry) => entry?.file === name) ?? [];
@@ -102,6 +101,12 @@ if (canonicalChapterModule && builtChapterModule && !canonicalChapterModule.equa
 const htmlFiles = walk(distRoot).filter((file) => file.endsWith('.html'));
 for (const file of htmlFiles) {
   const html = fs.readFileSync(file, 'utf8');
+  if (/FLOW_[A-Z_]+_PENDING/.test(html)) {
+    failures.push(`${path.relative(docsRoot, file)} has unfinished dashboard recording integration`);
+  }
+  if (/<video\b[^>]*(?:dashboard-1\.5|dashboard-task-1\.5|required-review-1\.5)\//i.test(html)) {
+    failures.push(`${path.relative(docsRoot, file)} embeds a retired dashboard recording`);
+  }
   if (/<body\b/i.test(html) && !isEmailOff(html)) {
     failures.push(`${path.relative(docsRoot, file)} does not wrap its body in <!--email_off-->, so Cloudflare can rewrite text such as verify-receipt@v1.4.0 into "[email protected]"`);
   }
@@ -121,4 +126,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`Checked ${htmlFiles.length} built pages, the canonical favicon, and ${recordings.length * (1 + sharedMediaFiles.length)} canonical recording media files plus their shared chapter controls.`);
+console.log(`Checked ${htmlFiles.length} built pages, the canonical favicon, and ${recordings.reduce((count, recording) => count + recording.files.length, 0)} canonical recording media files plus their shared chapter controls.`);

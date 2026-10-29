@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Replace the current dashboard videos and screenshots across the marketing site,
+  first-Session and review guides, receipt documentation and README with a Dark-mode
+  1.5.3 task from workspace opening through signed receipt download. Keep the older
+  recordings and provenance as history, and bind the new clickable chapters to
+  the recorded task, checks, review and receipt evidence.
+
 ## [1.5.3] - 2026-10-29
 
 ### Release process

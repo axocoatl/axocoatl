@@ -30,51 +30,65 @@ Keep the sign-in link private.
 
 ## Watch the dashboard flow
 
-Follow the same flow shown on the website: open a Workspace, send a request,
-watch the Agents work, then review and correct the result. Pause the video as you
-work through the steps below in your own repository.
+Follow the same flow shown on the website: open a Workspace, apply Team & budget,
+send a request, follow the Agents, inspect the result and download its signed
+receipt. Pause the video as you work through the steps below in your own repository.
 
 <figure class="dashboard-walkthrough">
-  <video id="dashboard-task-video" controls muted playsinline preload="metadata" width="1280" height="720"
-    poster="/assets/dashboard-task-1.5/result.jpg"
-    src="/assets/dashboard-task-1.5/dashboard-task.mp4"
-    aria-label="A task from workspace setup to reviewed changes in Axocoatl 1.5"
+  <video id="dashboard-task-video" controls muted playsinline preload="metadata" width="1488" height="982"
+    poster="/assets/dashboard-flow-1.5.3/dashboard-flow.jpg"
+    src="/assets/dashboard-flow-1.5.3/dashboard-flow.mp4"
+    aria-label="A full dashboard task and receipt download in Axocoatl 1.5.3"
     aria-describedby="walkthrough-caption">
-    <track kind="captions" src="/assets/dashboard-task-1.5/captions.vtt" srclang="en" label="Walkthrough captions" default />
-    <track kind="chapters" src="/assets/dashboard-task-1.5/chapters.vtt" srclang="en" label="Task chapters" />
-    <a href="/assets/dashboard-task-1.5/dashboard-task.mp4">Download the walkthrough</a>.
+    <track kind="captions" src="/assets/dashboard-flow-1.5.3/dashboard-flow.captions.vtt" srclang="en" label="Walkthrough captions" default />
+    <track kind="chapters" src="/assets/dashboard-flow-1.5.3/dashboard-flow.chapters.vtt" srclang="en" label="Task chapters" />
+    <a href="/assets/dashboard-flow-1.5.3/dashboard-flow.mp4">Download the full walkthrough</a>.
   </video>
   <figcaption id="walkthrough-caption">
-    An actual Axocoatl 1.5 task on a prepared pagination project. Four requests,
-    model failures, recovery and test restoration lead to a checked result.
-    Waiting is shortened and the recording combines captured UI segments.
+    An edited recording of an actual task in released Axocoatl 1.5.3, in Dark mode.
+    The first review failed; the operator sent a correction, and a later review
+    approved the result. The recovery and receipt download stay in the recording.
   </figcaption>
 </figure>
 
-- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="0" aria-controls="dashboard-task-video" aria-label="Play from 0:00: Open workspace">0:00</button> — [Open a Workspace and create a Session](#1-open-your-repository-and-create-a-session).
-- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="22.554" aria-controls="dashboard-task-video" aria-label="Play from 0:23: Send request">0:23</button> — [Send the request](#3-ask-for-one-result-in-conversation).
-- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="31.488" aria-controls="dashboard-task-video" aria-label="Play from 0:31: Follow agents and recover">0:31</button> — [Follow the Agents and handle a failed turn](#follow-the-work).
-- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="81.788" aria-controls="dashboard-task-video" aria-label="Play from 1:22: Review and correct">1:22</button> — [Review the files and correct the result](#4-inspect-the-files-and-review-the-diff).
+{/* FLOW_DOCS_TASK_CHAPTERS_START */}
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="0" aria-label="Jump to Open a workspace at 0:00">0:00</button> Open a workspace
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="16.548" aria-label="Jump to Set checks and review at 0:16">0:16</button> Set checks and review
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="42.446" aria-label="Jump to Send the request at 0:42">0:42</button> Send the request
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="51.36175" aria-label="Jump to Watch the agents at 0:51">0:51</button> Watch the agents
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="57.61625" aria-label="Jump to Keep the failed attempt at 0:57">0:57</button> Keep the failed attempt
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="71.46025" aria-label="Jump to Request the correction at 1:11">1:11</button> Request the correction
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="98.9835" aria-label="Jump to Run checks and review again at 1:38">1:38</button> Run checks and review again
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="128.2355" aria-label="Jump to Inspect the approved result at 2:08">2:08</button> Inspect the approved result
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="142.4015" aria-label="Jump to Download the turn receipt at 2:22">2:22</button> Download the turn receipt
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="156.19916666666663" aria-label="Jump to Inspect the code changes at 2:36">2:36</button> Inspect the code changes
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="173.33816666666664" aria-label="Jump to Keep the final receipt at 2:53">2:53</button> Keep the final receipt
+{/* FLOW_DOCS_TASK_CHAPTERS_END */}
 
-<script is:inline type="module" src="/assets/ax-video-chapters.js?v=20261027-chapters"></script>
+<script is:inline type="module" src="/assets/ax-video-chapters.js?v=20261029-flow"></script>
 
 <details>
-  <summary>The recording's team and recovery</summary>
+  <summary>The recording's team, outcome, and edits</summary>
 
-The task starts with a local Qwen3-Coder 30B Lead and read-only GPT-OSS 20B Scout.
-It finishes with GPT-OSS 20B as the Lead and helpers off. The host requires
-`npm test`; no model review is required. The steps below start with one Agent;
-helpers remain optional.
+The Lead uses local `gpt-oss:20b`; the required read-only reviewer uses local
+`qwen3-coder:30b`. The host runs `npm run test`. No helpers or hosted model calls
+were used.
 
-Malformed responses needed recovery. Review found removed original tests and
-requested their restoration. Scout also claimed tests it had not run: use the
-host's check output and the actual files as evidence. The final correction passed
-the host check and independent artifact review. This is one prepared task, not a
-model comparison. This 1.5.0 recording predates dashboard turn receipts; the
-receipt step below applies to current native Sessions.
+The first attempt removed an existing test and its required review failed on a
+malformed tool call. The operator explicitly finished that attempt, inspected the
+files and sent a correction. The corrected task passed the host check, and the
+required reviewer approved it in the second round. Earlier work and its partial
+receipt remain in the evidence. The final receipt covers the test file changed
+in the corrected turn; the earlier receipt covers its own source and test files.
+The complete final artifact is assessed separately.
 
-[Recording sources and edits](https://axocoatl.ai/assets/demo/dashboard-task-1.5/provenance.json) ·
-[Actual patch and artifact review](https://axocoatl.ai/assets/demo/dashboard-task-1.5/artifact-evidence.json)
+An offscreen attempt to change the reviewer configuration did not replace this
+Session's retained Qwen definition. The effective models come from runtime evidence
+and the receipts. Waiting and navigation are shortened; the source timeline records
+the edits. This is a recovered task, not a one-prompt success or a quality comparison.
+
+[Recording sources and edits](https://axocoatl.ai/assets/demo/dashboard-flow-1.5.3/provenance.json) ·
+[Task and receipt verification](https://axocoatl.ai/assets/demo/dashboard-flow-1.5.3/artifact-evidence.json)
 
 </details>
 
@@ -102,9 +116,10 @@ or authorized this folder. **Open workspace…** is that deliberate authorizatio
 The first Send button reads **Set budget**. Select it to open **Team & budget**.
 Choose **Edit** and inspect the selected Agent, model and limits. Open
 **Required checks** and add the command that verifies your task. For the Node
-project in the video, that is `npm test`; use your repository's own check command.
-Then choose **Preview changes → Apply to this Session**. Nothing is approved until
-you apply it.
+project in the video, that is `npm run test`; use your repository's own check command.
+To follow the recording, also enable **Required review** and choose a read-only
+reviewer on a different model. Then choose **Preview changes → Apply to this
+Session**. Nothing is approved until you apply it.
 
 Keep one Agent for a small first task. Read-only helpers, required checks and a
 required review are opt-in. They are separate choices: asking a helper to review
@@ -127,13 +142,12 @@ If you can verify a small issue, report its reproduction too. State uncertainty 
 ```
 
 Choose a specific issue from that report. Name the behavior to fix, what must stay
-unchanged and how to check it. Adapt this example from the video to your project:
+unchanged and how to check it. The recording uses this small pagination task:
 
 ```text
-Fix pagination losing the final page when the item count is an exact multiple
-of the page size. Preserve the public API and all existing tests. Add regression
-tests for one full page and page size one. Run npm test, summarize the actual
-result, and do not commit.
+Fix pagination dropping the final partial page. Preserve the public API and all
+existing tests. Add regression tests for one item and page size one. Run npm test,
+inspect the diff, and do not commit.
 ```
 
 ### Follow the work
@@ -144,9 +158,7 @@ select an Agent to inspect its recorded work. Return to Conversation for the res
 
 **Stop** addresses the active turn. If a turn fails, read its reason and inspect
 what already changed before using **Turn controls → Continue**. Failed and
-interrupted work remains in **History**. The recording includes recovery requests
-and a later model change; these are responses to that task's failures, not setup
-steps to repeat. [Recovery controls →](/workbench/history/#control-native-work)
+interrupted work remains in **History**. [Recovery controls →](/workbench/history/#control-native-work)
 
 ## 4. Inspect the files and review the diff
 
@@ -165,20 +177,18 @@ The final answer is a starting point for review. Inspect the result in the dashb
 5. Stage and commit only after the diff and check results satisfy your request.
 
 <figure>
-  <a href="/assets/dashboard-task-1.5/result.jpg" aria-label="Open the full-size result from the walkthrough (1280 × 720)">
-    <img src="/assets/dashboard-task-1.5/result.jpg" width="1280" height="720" loading="lazy"
-      alt="The walkthrough's final Axocoatl Files view, showing the pagination fix and test file in Source Control with All changes selected." />
+  <a href="/assets/dashboard-flow-1.5.3/dashboard-flow.jpg" aria-label="Open the full-size result from the 1.5.3 walkthrough">
+    <img src="/assets/dashboard-flow-1.5.3/dashboard-flow.jpg" width="1488" height="981" loading="lazy"
+      alt="The actual result of the Axocoatl 1.5.3 dashboard task." />
   </a>
   <figcaption>
-    The walkthrough's final diff. The pagination fix and regression tests stay
-    uncommitted; the original tests have been restored. Select the image to view
-    it at full size.
+    Inspect the actual changes before committing. Select the image to view the
+    recorded task's result at full size.
   </figcaption>
 </figure>
 
 If review finds a missing requirement, send a specific correction in Conversation
-and repeat the checks and diff review. In the video, that meant restoring the
-original tests before accepting the fix.
+and repeat the checks and diff review.
 
 <Aside type="note" title="You decide what to commit">
 The normal result leaves edits in the Session working tree. Source Control offers
@@ -194,6 +204,9 @@ reachable from **History → Signed receipt** after a reload.
 It records the turn and its revision, Agents and models, recorded checks and review,
 and file hashes from the retained repository captures. Checks and review appear
 as performed only when they actually ran.
+
+Each receipt describes one turn. After several turns, inspect **All changes** and
+keep the relevant receipts; the latest receipt does not replace earlier evidence.
 
 Keep the downloaded file with the result you reviewed. A teammate can verify it
 offline against a trusted key and the covered repository files. The receipt shows

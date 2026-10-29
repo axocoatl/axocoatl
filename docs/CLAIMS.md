@@ -75,7 +75,7 @@ withheld tests the agents never see. Writer qwen3-coder 30B on local Ollama, tem
 | R8 | A panel of three same-model critics: 17 / 25 at 4.7×; together with R4 and R5, "another look by the same model added nothing … at 2.3× to 4.7× the tokens" | fix-qa-audit | `walled-tests/panel-P-Q/PANEL.md`, arm P | Plain loop | measured |
 | R9 | "Extra tokens helped when they bought a stronger model's judgment, not more looks from the same model." In README and on the marketing home also: "A stronger, different reviewer helped a small local writer; a second look from the same model didn't." | README, llms.txt, what-we-measured, marketing home | R1–R8 | Axocoatl 1.1.0 and plain loop | measured, for this bank and these two local models only |
 | R10 | Axocoatl's token counts are higher than the plain loop's for the same work | what-we-measured | `axocoatl-1.1.0/NOTES-X32k.md`; `README.md` of the directory | Both | measured |
-| R11 | Historical demo: a real Axocoatl 1.1.0 Session from the benchmark, trimmed and cropped to the conversation and agent graph but otherwise unedited; the poster shows round 1 asking for changes at 2:30. Retained as historical evidence; the homepage now has a separate Axocoatl 1.5 invoice-validation demonstration with a local GPT-OSS 20B Lead and Qwen3-Coder 30B required reviewer, which does not extend the benchmark results. | Retired marketing clip `assets/demo/cross-model-review.mp4` and `.jpg`; replacement section `#cross-model-review` has its own recording provenance and artifact evidence | `axocoatl-1.1.0/NOTES-X32k.md` (invoice_settlement arm X, start and end trimmed); frames in `axocoatl-1.1.0/screens/`; new demonstration: `sites/marketing/assets/demo/required-review-1.5/` | Historical benchmark: Axocoatl 1.1.0; separate demonstration: Axocoatl 1.5 | Historical measured provenance retained; new demonstration makes no comparative result claim |
+| R11 | Historical demo: a real Axocoatl 1.1.0 Session from the benchmark, trimmed and cropped to the conversation and agent graph but otherwise unedited; the poster shows round 1 asking for changes at 2:30. Retained as historical evidence. The homepage's current 1.5.3 dashboard demonstration is a separate functional example and does not extend the benchmark results. | Retired marketing clip `assets/demo/cross-model-review.mp4` and `.jpg`; current section `#cross-model-review` has its own recording provenance and artifact evidence | `axocoatl-1.1.0/NOTES-X32k.md` (invoice_settlement arm X, start and end trimmed); frames in `axocoatl-1.1.0/screens/`; current demonstration: `sites/marketing/assets/demo/dashboard-flow-1.5.3/`; earlier 1.5.0 demonstration retained at `sites/marketing/assets/demo/required-review-1.5/` | Historical benchmark: Axocoatl 1.1.0; current functional demonstration: Axocoatl 1.5.3 | Historical measured provenance retained; current demonstration makes no comparative result claim |
 | R12 | Product text: the same-model warning, "A same-model second look measured no gain; choose a different reviewer model" (run warning) and "a same-model second look measured no gain" (loadout validation) | `crates/axocoatl-session/src/run_outcome.rs`, `crates/axocoatl-config/src/loadout.rs`; shown by the API, Settings, Team and budget, `axocoatl run` and the record | R4, R5, R8 | Plain loop | measured, for this bank only |
 
 Limits stated on the public pages: one run per task, 6 tasks, one language, two local
@@ -157,7 +157,7 @@ implementation:
   onboarding otherwise defaults to starting the foreground daemon itself.
 - Provider examples retain repository tools, introductory Agent examples do not
   refer to an undefined planner, and source builds include an installation step.
-- The homepage now shows actual 1.5 dashboard screenshots and a UI navigation
+- On this date, the homepage showed actual 1.5 dashboard screenshots and a UI navigation
   recording of the saved local fixture run
   `run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3`. The installed capture binary matches
   the frozen release binary. The request, changed file, host check, required review
@@ -168,7 +168,7 @@ implementation:
   Screenshot bytes, capture times, actual frame timings and media hashes are bound
   by `sites/marketing/assets/demo/dashboard-1.5/provenance.json`. This is one
   functional example, not comparative evidence of model quality.
-- The first-Session docs use the original signed 1.5 Safari workbench captures:
+- On this date, the first-Session docs used the original signed 1.5 Safari workbench captures:
   one native OpenRouter GPT-OSS 120B Agent, no helpers, required review or host-run
   required checks. They are distinct from the local headless run on the homepage.
   Captions do not present the Agent's test claim as a host-enforced check or add a
@@ -210,6 +210,35 @@ with the offline CLI. That is a mechanism regression, not model-quality evidence
 Existing 1.5.0 recordings and their provenance remain historical and are not
 relabelled as demonstrations of this added receipt path.
 
+## Current dashboard walkthrough (2026-10-29)
+
+The current marketing, first-Session, required-review and receipt videos, plus
+README posters and chapter links, use
+`sites/marketing/assets/demo/dashboard-flow-1.5.3/`. The actual released 1.5.3 app
+was operated in explicit Dark mode from Workspace opening and Session/team setup
+through the request, work, file inspection and receipt download. The recording is
+edited; source frames, timing and render hashes remain in its provenance.
+
+This prepared pagination task uses a local GPT-OSS 20B Lead and local Qwen3-Coder
+30B required read-only reviewer, with the host-required `npm run test` check and
+no helpers or hosted model calls. The first attempt removed an existing test and
+its reviewer failed on malformed tool output. The operator explicitly finished
+that attempt, inspected the files and requested a correction. The corrected task
+passed its host check and was approved in its required review's second round.
+An offscreen configuration change was attempted, but the Session retained its
+original Qwen reviewer definition; the record does not claim a same-model review.
+
+The capture preserves the failed attempt and its partial receipt separately from
+the corrected task and its downloaded receipt. `artifact-evidence.json` retains
+both attempted artifacts and independent assessment; the media verifier binds
+the signed receipts to their own evidence and covered files. The final receipt
+covers `test/paginate.test.js`, the file changed in the corrected turn. The earlier
+receipt covers the earlier source and test changes; neither is relabelled as a
+receipt for all work in the Session. This is one recovered
+functional demonstration. It is not a one-prompt success, performance measurement,
+or evidence that this model pair improves quality. Historical 1.5.0 recordings and
+the 1.1.0 comparison retain their original versions and provenance.
+
 ## Not measured
 
 These are supported and documented, and have no measurement. Public pages do not make
@@ -221,8 +250,9 @@ quality or performance claims about them.
   built-ins' default writer models (`anthropic:sonnet`, `openai:gpt-6.1-sol`) and
   budgets are choices, not measurements.
 - External agents (Claude Code CLI, Codex CLI) run inside an Axocoatl Session.
-- The dashboard receipt shown on the marketing homepage belongs to the saved
-  local fix run above. It illustrates the UI and recorded facts, not model quality.
+- The dashboard receipt shown on the marketing homepage belongs to the current
+  1.5.3 task recorded above. It illustrates the workflow and recorded facts, not
+  model quality.
 - The e2e check (tester-army/e2e) as a required check.
 - Any reviewer or Agent through OpenRouter.
 - `gpt-oss:20b` as the reviewer of a `qwen3-coder:30b` writer, the pair the commands use and

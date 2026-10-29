@@ -1,0 +1,129 @@
+{
+  "schema": "axocoatl.dashboard-flow-integration/1",
+  "version": "1.5.3",
+  "dimensions": [
+    1488,
+    982
+  ],
+  "source_dimensions": [
+    1488,
+    981
+  ],
+  "clips": {
+    "dashboard-flow": {
+      "video": "dashboard-flow.mp4",
+      "poster": "dashboard-flow.jpg",
+      "captions": "dashboard-flow.captions.vtt",
+      "chapterTrack": "dashboard-flow.chapters.vtt",
+      "duration_seconds": 179.06716666666662,
+      "chapters": [
+        {
+          "time_seconds": 0.0,
+          "label": "Open a workspace"
+        },
+        {
+          "time_seconds": 16.548,
+          "label": "Set checks and review"
+        },
+        {
+          "time_seconds": 42.446,
+          "label": "Send the request"
+        },
+        {
+          "time_seconds": 51.36175,
+          "label": "Watch the agents"
+        },
+        {
+          "time_seconds": 57.61625,
+          "label": "Keep the failed attempt"
+        },
+        {
+          "time_seconds": 71.46025,
+          "label": "Request the correction"
+        },
+        {
+          "time_seconds": 98.9835,
+          "label": "Run checks and review again"
+        },
+        {
+          "time_seconds": 128.2355,
+          "label": "Inspect the approved result"
+        },
+        {
+          "time_seconds": 142.4015,
+          "label": "Download the turn receipt"
+        },
+        {
+          "time_seconds": 156.19916666666663,
+          "label": "Inspect the code changes"
+        },
+        {
+          "time_seconds": 173.33816666666664,
+          "label": "Keep the final receipt"
+        }
+      ]
+    },
+    "review": {
+      "video": "review.mp4",
+      "poster": "review.jpg",
+      "captions": "review.captions.vtt",
+      "chapterTrack": "review.chapters.vtt",
+      "duration_seconds": 86.32175,
+      "chapters": [
+        {
+          "time_seconds": 0.0,
+          "label": "Watch the agents"
+        },
+        {
+          "time_seconds": 6.2545,
+          "label": "Keep the failed attempt"
+        },
+        {
+          "time_seconds": 20.0985,
+          "label": "Request the correction"
+        },
+        {
+          "time_seconds": 47.62175,
+          "label": "Run checks and review again"
+        },
+        {
+          "time_seconds": 76.87375,
+          "label": "Inspect the approved result"
+        }
+      ]
+    },
+    "receipt": {
+      "video": "receipt.mp4",
+      "poster": "receipt.jpg",
+      "captions": "receipt.captions.vtt",
+      "chapterTrack": "receipt.chapters.vtt",
+      "duration_seconds": 36.66566666666663,
+      "chapters": [
+        {
+          "time_seconds": 0.0,
+          "label": "The completed turn"
+        },
+        {
+          "time_seconds": 2.025666666666628,
+          "label": "Download the receipt"
+        },
+        {
+          "time_seconds": 8.010666666666628,
+          "label": "Understand its coverage"
+        },
+        {
+          "time_seconds": 13.797666666666627,
+          "label": "Inspect the source change"
+        },
+        {
+          "time_seconds": 24.77466666666663,
+          "label": "Inspect the test change"
+        },
+        {
+          "time_seconds": 30.93666666666663,
+          "label": "Keep the signed receipt"
+        }
+      ]
+    }
+  }
+}

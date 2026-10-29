@@ -4,9 +4,9 @@ Vanilla HTML, Web Components, and CSS. The public site tells one product story:
 run coding agents unattended; agents write the code, Axocoatl writes the receipt.
 Claude Code, Codex or a model you choose works in a sandbox with its model credential
 kept on the host. Fix loadouts require checks and review on the final files; QA and
-audit use their own workflows. The daemon signs finished loadout outcomes, but a
-refusal before admission has no receipt and a signing failure is reported without
-changing the run verdict. Verify receipts separately. Isolation, the record and model
+audit use their own workflows. The daemon signs finished loadout outcomes and, on
+download, retained evidence from finished native dashboard turns. A refusal before
+admission has no receipt; signing failures remain explicit. Verify receipts separately. Isolation, the record and model
 choice are the evidence behind the receipt, not the pitch (`BRAND.md`). A lead writes, read-only helpers answer and review, and opt-in required checks
 and review decide when a turn is done, all inside one durable folder-anchored Session. Conversation, context, files,
 terminal, Preview, tools, history, and Git are the core work surface. Settings owns Agents, Skills, MCP servers, and Automations and
@@ -33,7 +33,7 @@ and reduced-motion states.
 
 | Path | Purpose |
 |---|---|
-| `/` | The current dashboard first: Install and Open your first Session actions, a real Files screenshot, a short walkthrough and four views of one accepted 1.5 run, receipt limits and evidence links, loadouts, mechanisms and qualified historical measurements. Copyable commands stay on Install and in the guides |
+| `/` | The current dashboard first: Install and Open your first Session actions, a real 1.5.3 task from workspace opening to receipt download, review and receipt excerpts, actual stills, receipt limits and evidence links, loadouts, mechanisms and qualified historical measurements. Copyable commands stay on Install and in the guides |
 | `/compare` | Mechanisms only: questions to ask of any setup (who runs the checks, who reviews, where the credential lives, network, record, CI, changes, spend) answered for a loadout run, and how that differs from running Claude Code or Codex directly, a devcontainer, or a parallel-agent workbench, without naming or describing other products beyond links to their own documentation |
 | `/concepts` | What the host enforces and where it stops (isolation, any model per Agent, a short measured summary), then Workspace, Session, Turn, sandboxed work surface, execution shapes, completion conditions and write scopes, Settings, workspace knowledge, events, compatibility MCP approval, optional Ways, and runtime boundaries |
 | `/why` | Why an agent's "done" is not evidence: the measured self-review result, the host deciding, the receipt, why a local binary, and when to use the workbench |
@@ -59,99 +59,71 @@ that payload; `source-bound` still runs the installer tests and `--release-bound
 and `marketing-deploy` therefore deploy the pending site. Delete `PENDING` with the
 recordings and the full film contract applies again.
 
-## Optional evidence excerpts and video
+## Dashboard walkthrough and historical media
 
-The homepage uses the existing `<!-- optional-demo: … -->` slots independently of
-pending portfolio films. A slot renders and its declared assets are copied only
-when all exist; with none it is omitted, and a partial set fails the build.
+The current `assets/demo/dashboard-flow-1.5.3/` package replaces the older
+saved-run tour, task walkthrough and required-review demonstration on the homepage,
+README and documentation site. It records a new task operated through the actual
+released 1.5.3 dashboard in explicit **Dark** mode: Workspace, Session, Team & budget,
+request, work, artifact inspection and signed receipt download. It is a functional
+example; it does not extend the historical model-quality measurements.
 
-The `dashboard-1.5` slot contains real captures of the installed Axocoatl 1.5
-app reviewing one completed CLI-launched fix run. The hero shows its actual Files
-diff. The walkthrough and four stills show the conversation, code change, check and
-review, and signed receipt. Captions distinguish this saved loadout run from an
-interactive workbench turn recorded on 1.5.0, before native turn receipts. The media
-is not a live model execution or a performance demonstration. Native video controls remain available
-without JavaScript, and each still opens at full size.
+The package has three clips: `dashboard-flow.mp4`, `review.mp4` and `receipt.mp4`.
+Each has its own original JPG poster, captions and chapter VTT. `integration.json`
+provides their filenames, dimensions, durations and exact chapter times. Render the
+marketing and docs chapter buttons, and README timestamp links, from that manifest.
+The shared `components/ax-video-chapters.js` seeks the corresponding video; native
+controls remain usable without JavaScript, and there is no autoplay. Keep captions
+enabled by default and stills available at full size. Preserve the capture's actual
+aspect ratio instead of cropping or forcing a widescreen frame.
 
-`assets/demo/dashboard-1.5/provenance.json` binds the captures, recording, exact
-binary, and frozen accepted artifact. The original public evidence remains linked;
-its two recovered reviewer tool errors are retained. The older literal excerpts
-under `verified-fix-1.5` remain as source evidence, but no longer form the homepage
-walkthrough.
+`provenance.json` binds the released executable, captured sources, edit timeline,
+rendered media, artifact evidence and signed receipt files. `timeline.json` records
+which actual dashboard frames appear at which playback times. The source JPEG
+archives are split below the hosting service's per-file limit; no source frame is
+redrawn. `artifact-evidence.json` preserves the request, baseline, attempted patches,
+checks, independent artifact assessment and interventions. Earlier attempts and
+receipts remain distinct from the final result. State effective models and outcome
+from retained runtime evidence and the actual receipt, not merely the latest
+configuration file or a model's answer.
 
-The dashboard assets have their own strict verifier, invoked for both source and
-built payloads even while portfolio films are pending:
+The homepage uses `<!-- optional-demo: … -->` slots independently of the pending
+portfolio films. A slot renders and its declared assets are copied only when all
+exist; with none it is omitted, and a partial set fails the build. The current full
+package is mandatory in the site validator even when portfolio films are pending.
+Declare every `provenance.files` entry plus `provenance.json` in the current receipt
+slot, so the built payload contains all evidence and the verifier, not only MP4s.
+
+The strict verifier runs for source and built payloads:
 
 ```bash
-node assets/demo/dashboard-1.5/verify-media.mjs --repo ../.. --probe
+node assets/demo/dashboard-flow-1.5.3/verify-media.mjs \
+  --dir assets/demo/dashboard-flow-1.5.3 --repo ../.. --probe
 ```
 
-This requires `ffmpeg` and `ffprobe`; the deployment installs them when the dashboard
-video ships. It does not mark any of the twelve pending product films accepted or
-reuse their historical provenance. Keep original captures immutable, include their
-exact provenance, capture metadata and source-frame archive in the optional slot, and inspect the actual
-frames for private data before publication.
+It requires `ffmpeg` and `ffprobe`. Keep `assemble-media.py` and `ASSEMBLY.md` with
+this package so its documented source-to-playback transformation is reproducible.
+Inspect the actual frames for private data before publication. Captions and adjacent
+copy must disclose edited waits, failed attempts and operator interventions. Add
+outcome claims only after inspecting the retained result and independent artifact
+assessment. A failed review must not become an approval through editing; a signed
+receipt does not establish that the code is correct.
 
-The separate `dashboard-task-1.5` slot follows a new native workbench task below
-that saved-run tour. All nine assets must exist before the build includes it:
-`dashboard-task.mp4`, `result.jpg`, `chapters.vtt`, `captions.vtt`, `provenance.json`,
-`source-capture.tar.gz`, `timeline.json`, `verify-task.mjs`, and
-`artifact-evidence.json`. The source and built payload validators run its full `--repo <repository-root> --probe` verification;
-pending portfolio films do not exempt the task recording from these checks.
+The older folders remain unchanged as historical source evidence:
 
-This four-turn prepared pagination task started with a local Qwen3-Coder 30B lead
-and read-only GPT-OSS 20B Scout, then finished with GPT-OSS 20B as the lead and helpers
-off. The team required `npm test`, with no required model review or hosted model
-calls. The final host check passed all eight tests, all four original tests were
-retained, and the artifact passed independent review.
+- `dashboard-1.5/`: navigation of a completed CLI-launched 1.5.0 loadout run.
+- `dashboard-task-1.5/`: a four-turn 1.5.0 native pagination task with recovery and
+  no native turn receipt.
+- `required-review-1.5/`: a separate 1.5.0 invoice-validation task and review,
+  including a defective approved result and correction; no native turn receipt.
+- `verified-fix-1.5/`: literal evidence excerpts from the older loadout run.
+- `cross-model-review.mp4` and `.jpg`: the historical 1.1.0 benchmark capture,
+  attributed in `docs/CLAIMS.md` R11.
 
-The recording retains malformed tool-call failures, operator recovery, and requests
-to restore coverage after file review found two removed original tests. Scout also
-reported tests it had not run; test evidence comes from the host and independent
-artifact checks. Codex operated the actual browser UI. Captured segments are combined, waiting is sped up 6×
-(selected correction waits 8×), and private folder navigation and unrecorded gaps
-are omitted; the provenance and source-to-playback timeline document the edits. This is neither a one-prompt success
-nor a performance or comparative-quality measurement. Passing the host's checks did
-not replace independent artifact review. `artifact-evidence.json` retains the final
-accepted assessment alongside the earlier failed assessment, actual patches and
-test output.
-
-Keep the four chapter labels aligned with the capture: Open workspace, Send request,
-Follow agents & recover, and Review and correct. Explanatory captions identify
-stages, recovery and the model change in the silent video; the caption track is
-enabled by default and the separate chapter track remains available. Use native
-video controls without autoplay and keep the result available at full size. This ordinary workbench turn
-must not be presented as producing a signed receipt.
-
-The `required-review-1.5` slot replaces the historical review clip on the homepage.
-It requires all nine files before the whole section appears: `required-review.mp4`,
-`result.jpg`, `captions.vtt`, `chapters.vtt`, `provenance.json`,
-`artifact-evidence.json`, `source-capture.tar.gz`, `timeline.json`, and
-`verify-review.mjs`. The complete set must reach the built payload for verification.
-The new invoice input-validation task uses a local GPT-OSS 20B Lead, a read-only
-local Qwen3-Coder 30B required reviewer, and the host-required `npm test` check.
-It is separate from the unchanged Axocoatl 1.1.0 comparison above it: its models and
-outcomes must not be attributed to that benchmark.
-
-The first required review approved, but independent artifact checks found that the
-Lead had removed a finite-price guard, allowing an oversized price to become
-Infinity. A dashboard follow-up requests restoration and another cycle of required
-checks and review. A reviewer is evidence, not a guarantee. Preserve the first
-approved-but-defective result alongside the follow-up; add a final pass claim only
-after the follow-up and its independent acceptance finish.
-
-Capture the actual app with its explicit Dark setting, including the poster.
-Name the AI assistant as the UI operator and disclose trimmed or accelerated waits
-in the caption and provenance. Keep default captions, native video controls and a
-full-size result link. Add outcome claims only after inspecting the completed run
-and independent artifact assessment; preserve failed attempts and interventions.
-This native Session has no signed run receipt. Add chapter buttons only once their
-timestamps match the final recording.
-
-The retired `cross-model-review.mp4` and `cross-model-review.jpg` remain historical
-Axocoatl 1.1.0 evidence in the repository, with their original benchmark attribution
-in `docs/CLAIMS.md` R11. They are no longer included by the homepage's optional slot.
-`.gitignore` keeps MP4 and JPEG files under `assets/demo/` tracked.
+Those recordings are not current demonstrations of 1.5.3 and do not establish the
+new receipt workflow. Retain their versions, evidence and verifiers. `.gitignore`
+keeps MP4 and JPEG files under `assets/demo/` tracked. The separate twelve-film
+portfolio contract below is unchanged by this walkthrough.
 
 ## Deployment payload
 

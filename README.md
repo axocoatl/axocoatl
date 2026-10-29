@@ -9,50 +9,55 @@ Review the actual changes before you commit.
 
 [![CI](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml/badge.svg)](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/axocoatl-cli.svg)](https://crates.io/crates/axocoatl-cli) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-[![Axocoatl 1.5 dashboard showing the completed pagination task](sites/marketing/assets/demo/dashboard-task-1.5/result.jpg)](https://axocoatl.ai/#dashboard-task)
+[![The actual Axocoatl 1.5.3 dashboard task](sites/marketing/assets/demo/dashboard-flow-1.5.3/dashboard-flow.jpg)](https://axocoatl.ai/#dashboard-task)
 
-**[Watch a task from request to verified files](https://axocoatl.ai/#dashboard-task)** ·
-[Create your first Session](https://docs.axocoatl.ai/start/first-session/) ·
-[Tour a saved run and its receipt](https://axocoatl.ai/#verified-fix)
+**[Watch a full task through receipt download](https://axocoatl.ai/#dashboard-task)** ·
+[Follow the first-Session guide](https://docs.axocoatl.ai/start/first-session/) ·
+[See the receipt download](https://axocoatl.ai/#verified-fix)
 
-An edited recording of one prepared pagination task in the actual dashboard.
-It retains model failures, recovery requests, a test-restoration correction and a
-change from Qwen3-Coder 30B to GPT-OSS 20B. The final files preserve all four original
-tests, add the requested regressions and pass independent checks. This is one
-prepared fixture, not a model comparison.
+A fresh task recorded in the released 1.5.3 dashboard in Dark mode: open a Workspace,
+apply Team & budget, send the request, follow the Agents, inspect the changes,
+and download the signed receipt. This is one functional demonstration, not a
+model-quality comparison. The first required review failed; the operator sent a
+correction, and another check and review cycle approved the result. Waiting and
+navigation are shortened; recovery stays visible.
 
-For finished native Session turns, open **Signed receipt** in Conversation or History.
-Download signs the retained turn evidence so you can verify its recorded checks, review
-and captured files offline. The
-recordings above predate dashboard receipts; the separate saved-run tour shows a
-CLI-launched fix with required checks, review and a signed receipt.
+<!-- FLOW_README_TASK_CHAPTERS_START -->
+[0:00 Open a workspace](https://axocoatl.ai/?t=0#dashboard-task-video) · [0:16 Set checks and review](https://axocoatl.ai/?t=16.548#dashboard-task-video) · [0:42 Send the request](https://axocoatl.ai/?t=42.446#dashboard-task-video) · [0:51 Watch the agents](https://axocoatl.ai/?t=51.36175#dashboard-task-video) · [0:57 Keep the failed attempt](https://axocoatl.ai/?t=57.61625#dashboard-task-video) · [1:11 Request the correction](https://axocoatl.ai/?t=71.46025#dashboard-task-video) · [1:38 Run checks and review again](https://axocoatl.ai/?t=98.9835#dashboard-task-video) · [2:08 Inspect the approved result](https://axocoatl.ai/?t=128.2355#dashboard-task-video) · [2:22 Download the turn receipt](https://axocoatl.ai/?t=142.4015#dashboard-task-video) · [2:36 Inspect the code changes](https://axocoatl.ai/?t=156.19916666666663#dashboard-task-video) · [2:53 Keep the final receipt](https://axocoatl.ai/?t=173.33816666666664#dashboard-task-video)
+<!-- FLOW_README_TASK_CHAPTERS_END -->
 
-<details>
-<summary><strong>See the saved run's actual diff, checks and receipt</strong></summary>
-
-[![Axocoatl 1.5 dashboard showing a completed CLI-launched paging fix in Files](sites/marketing/assets/demo/dashboard-1.5/changes.jpg)](https://axocoatl.ai/#verified-fix)
-
-[Watch the saved-run tour →](https://axocoatl.ai/#verified-fix)
-
-</details>
+The host runs the checks and review configured for the team. Finished native turns
+expose **Signed receipt** in Conversation and History. Download signs retained
+turn evidence so someone can verify the recorded facts and covered files offline
+against a trusted key. The signature does not prove that the change is correct.
 
 ## A required review, on screen
 
-[![Axocoatl 1.5 in Dark mode showing the corrected invoice-validation task](sites/marketing/assets/demo/required-review-1.5/result.jpg)](https://docs.axocoatl.ai/configure/cross-model-review/#watch-a-required-review)
+[![Required checks and review in the Axocoatl 1.5.3 dashboard](sites/marketing/assets/demo/dashboard-flow-1.5.3/review.jpg)](https://docs.axocoatl.ai/configure/cross-model-review/#watch-a-required-review)
 
-**[Watch the required-review walkthrough](https://docs.axocoatl.ai/configure/cross-model-review/#watch-a-required-review)**
+**[Watch the check and review excerpt](https://docs.axocoatl.ai/configure/cross-model-review/#watch-a-required-review)**
 
-Two requests with a local GPT-OSS 20B lead, a read-only Qwen3-Coder 30B reviewer,
-and required `npm test` checks. The first review approved a change that let an
-oversized price become `Infinity`; independent checks caught it, and a follow-up
-restored the guard and passed fresh checks and review. An AI assistant operated the
-actual dashboard in Dark mode; waits are trimmed and sped up. This prepared task
-is separate from the historical benchmark. A reviewer is evidence, not a guarantee.
+An excerpt from the same recorded task: a local GPT-OSS 20B Lead and local
+Qwen3-Coder 30B required reviewer. It retains the failed review and correction,
+followed by approval in the corrected task's second review round. A required review
+is a separate read-only activation the host starts after the configured checks.
+Inspect the actual files before deciding what to commit.
 
-[0:00 · Set requirements](https://docs.axocoatl.ai/configure/cross-model-review/?t=0#required-review-video) ·
-[0:35 · Watch review](https://docs.axocoatl.ai/configure/cross-model-review/?t=35.345#required-review-video) ·
-[0:45 · Check independently](https://docs.axocoatl.ai/configure/cross-model-review/?t=44.645#required-review-video) ·
-[1:15 · Review corrected result](https://docs.axocoatl.ai/configure/cross-model-review/?t=74.77#required-review-video)
+<!-- FLOW_README_REVIEW_CHAPTERS_START -->
+[0:00 Watch the agents](https://docs.axocoatl.ai/configure/cross-model-review/?t=0#required-review-video) · [0:06 Keep the failed attempt](https://docs.axocoatl.ai/configure/cross-model-review/?t=6.2545#required-review-video) · [0:20 Request the correction](https://docs.axocoatl.ai/configure/cross-model-review/?t=20.0985#required-review-video) · [0:47 Run checks and review again](https://docs.axocoatl.ai/configure/cross-model-review/?t=47.62175#required-review-video) · [1:16 Inspect the approved result](https://docs.axocoatl.ai/configure/cross-model-review/?t=76.87375#required-review-video)
+<!-- FLOW_README_REVIEW_CHAPTERS_END -->
+
+## Keep the receipt
+
+[![Downloading the task's signed receipt in Axocoatl 1.5.3](sites/marketing/assets/demo/dashboard-flow-1.5.3/receipt.jpg)](https://docs.axocoatl.ai/workbench/receipts/#downloading-a-dashboard-turns-receipt)
+
+[Watch the receipt download](https://docs.axocoatl.ai/workbench/receipts/#downloading-a-dashboard-turns-receipt) ·
+[Task and receipt verification](https://axocoatl.ai/assets/demo/dashboard-flow-1.5.3/artifact-evidence.json) ·
+[Recording sources, edits and limitations](https://axocoatl.ai/assets/demo/dashboard-flow-1.5.3/provenance.json)
+
+<!-- FLOW_README_RECEIPT_CHAPTERS_START -->
+[0:00 The completed turn](https://docs.axocoatl.ai/workbench/receipts/?t=0#dashboard-receipt-video) · [0:02 Download the receipt](https://docs.axocoatl.ai/workbench/receipts/?t=2.025666666666628#dashboard-receipt-video) · [0:08 Understand its coverage](https://docs.axocoatl.ai/workbench/receipts/?t=8.010666666666628#dashboard-receipt-video) · [0:13 Inspect the source change](https://docs.axocoatl.ai/workbench/receipts/?t=13.797666666666627#dashboard-receipt-video) · [0:24 Inspect the test change](https://docs.axocoatl.ai/workbench/receipts/?t=24.77466666666663#dashboard-receipt-video) · [0:30 Keep the signed receipt](https://docs.axocoatl.ai/workbench/receipts/?t=30.93666666666663#dashboard-receipt-video)
+<!-- FLOW_README_RECEIPT_CHAPTERS_END -->
 
 ## Open your first Session
 

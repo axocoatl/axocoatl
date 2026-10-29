@@ -476,63 +476,25 @@ if (builtRoot && !filmsPending) {
   }
 }
 
-// This current dashboard walkthrough is independent of the pending twelve-film
-// portfolio. Its actual captures and video always receive their full proof,
-// including in a PENDING build; optional-demo only controls asset staging.
-const dashboardDirectory = join(root, 'assets/demo/dashboard-1.5');
-if (!existsSync(dashboardDirectory)) {
-  fail('dashboard walkthrough', 'the current homepage requires its actual dashboard captures and video');
+// The current 1.5.3 dashboard recording is independent of the pending twelve-film
+// portfolio. Every current clip requires the actual captured source, task evidence,
+// receipt and media proof, including in PENDING builds. Older recordings and their
+// verifiers remain historical source assets; they are not current homepage clips.
+const dashboardFlowDirectory = join(root, 'assets/demo/dashboard-flow-1.5.3');
+if (!existsSync(dashboardFlowDirectory)) {
+  fail('dashboard flow', 'the current site requires its actual 1.5.3 recording and evidence');
 } else {
-  const verifier = join(dashboardDirectory, 'verify-media.mjs');
+  const verifier = join(dashboardFlowDirectory, 'verify-media.mjs');
   if (!existsSync(verifier)) {
-    fail('dashboard walkthrough', 'missing immutable capture/media verifier');
+    fail('dashboard flow', 'missing capture and receipt media verifier');
   } else {
-    const result = spawnSync(process.execPath, [verifier, '--repo', repositoryRoot, '--probe'], {
-      encoding: 'utf8', timeout: 120_000, maxBuffer: 2 * 1024 * 1024,
-    });
-    if (result.error || result.status !== 0) {
-      fail('dashboard walkthrough', result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `verifier exited ${result.status}`);
-    }
-  }
-}
-
-// A new native-task recording is staged independently. An absent draft remains
-// omitted, but any staged task assets require the complete, strictly verified set.
-const dashboardTaskDirectory = join(root, 'assets/demo/dashboard-task-1.5');
-if (existsSync(dashboardTaskDirectory)) {
-  const required = ['dashboard-task.mp4', 'result.jpg', 'chapters.vtt', 'captions.vtt', 'provenance.json',
-    'source-capture.tar.gz', 'timeline.json', 'verify-task.mjs', 'artifact-evidence.json'];
-  const missing = required.filter((name) => !existsSync(join(dashboardTaskDirectory, name)));
-  if (missing.length) {
-    fail('dashboard task', `incomplete capture assets: ${missing.join(', ')}`);
-  } else {
-    const result = spawnSync(process.execPath, [join(dashboardTaskDirectory, 'verify-task.mjs'),
+    const result = spawnSync(process.execPath, [verifier, '--dir', dashboardFlowDirectory,
       '--repo', repositoryRoot, '--probe'], {
       encoding: 'utf8', timeout: 300_000, maxBuffer: 2 * 1024 * 1024,
     });
     if (result.error || result.status !== 0) {
-      fail('dashboard task', result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `verifier exited ${result.status}`);
-    }
-  }
-}
-
-// Required-review media is a separate actual run, not a replay of the historical
-// benchmark. Once any assets are staged, enforce the full dark-capture proof in
-// both source and built payloads, including while the portfolio films are pending.
-const requiredReviewDirectory = join(root, 'assets/demo/required-review-1.5');
-if (existsSync(requiredReviewDirectory)) {
-  const required = ['required-review.mp4', 'result.jpg', 'chapters.vtt', 'captions.vtt', 'provenance.json',
-    'source-capture.tar.gz', 'timeline.json', 'verify-review.mjs', 'artifact-evidence.json'];
-  const missing = required.filter((name) => !existsSync(join(requiredReviewDirectory, name)));
-  if (missing.length) {
-    fail('required review', `incomplete capture assets: ${missing.join(', ')}`);
-  } else {
-    const result = spawnSync(process.execPath, [join(requiredReviewDirectory, 'verify-review.mjs'),
-      '--dir', requiredReviewDirectory, '--repo', repositoryRoot, '--probe'], {
-      encoding: 'utf8', timeout: 300_000, maxBuffer: 2 * 1024 * 1024,
-    });
-    if (result.error || result.status !== 0) {
-      fail('required review', result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `verifier exited ${result.status}`);
+      fail('dashboard flow', result.error?.message || result.stderr?.trim()
+        || result.stdout?.trim() || `verifier exited ${result.status}`);
     }
   }
 }
@@ -555,6 +517,10 @@ for (const page of builtPages) {
   const path = join(root, page);
   const rawHtml = readRequired(path, page, 'utf8');
   if (rawHtml === null) continue;
+  if (/FLOW_[A-Z_]+_PENDING/.test(rawHtml)) fail(page, 'unfinished dashboard recording integration');
+  if (/<video\b[^>]*(?:dashboard-1\.5|dashboard-task-1\.5|required-review-1\.5)\//i.test(rawHtml)) {
+    fail(page, 'current video embed uses a retired dashboard recording');
+  }
   // Validate a source page as it would be built: an optional demo slot whose files
   // are absent is not rendered, so its references are not checked.
   let html = rawHtml;

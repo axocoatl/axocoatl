@@ -1,0 +1,31 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:7acdb0c61c71a94f99bb20b83279398b0d0e889ec54634f54f5332526938c8ed",
+  "run_id": "turn-e13aa2bd-f2bf-42e8-bf7f-a5c52920d825",
+  "verdict": "pass",
+  "statement_sha256": "sha256:fabcbec2245ed0093208ad0d0b7c2441c7121ee11b63a27a027245123f8e3495",
+  "files": {
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "statement": [
+    "Session turn turn-e13aa2bd-f2bf-42e8-bf7f-a5c52920d825 (revision 129, completed), verdict pass, exit code 0",
+    "Signed by key 7acdb0c61c71a94f (ed25519 sha256:7acdb0c61c71a94f99bb20b83279398b0d0e889ec54634f54f5332526938c8ed)",
+    "Axocoatl 1.5.3, Session ses-86495386-4893-4f03-ac87-6e7961ee9a69 (closure timestamp not retained)",
+    "Base commit 5e77e49583215828ff9ada477355ea69edc90be2",
+    "Agent team-node-90ffa89a9f28d7ee36b166d1 (Autonomous): native, ollama:gpt-oss:20b",
+    "Agent required-review (Worker): native, ollama:qwen3-coder:30b",
+    "Check check-1: passed, exit 0 (sh -c npm run test)",
+    "Review by ollama:qwen3-coder:30b: approved (passed), 2 of 2 rounds, 2 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  test/paginate.test.js  sha256:46823405f34161d89f6c8e95e52be5cf74cd3f18768e8300a5b4501974263d2c",
+    "Not established: Historical sandbox settings, network totals, pre-existing dirty paths, program versions and the exact closure timestamp are not retained by this receipt. Absent fields mean unknown, not zero activity or isolation.",
+    "Not established: Usage is the retained activation subtotal; it may omit calls from failed or interrupted activations. It is not a complete billing record.",
+    "Not established: Historical check timeouts are not present in this projection; command, exit status and candidate hashes are retained."
+  ]
+}

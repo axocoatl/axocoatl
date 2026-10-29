@@ -22,8 +22,10 @@ A run refused before admission has no receipt. When loadout signing fails, the o
 For a native dashboard turn, the **Signed receipt** card below the finished turn
 and in **History → Signed receipt** offers **Download signed receipt**. Choosing
 Download signs retained terminal turn evidence, including its exact revision; it never hashes your current checkout
-at download time. A running turn or one that still needs attention is not a finished
-receipt. A signing or storage failure is shown as unavailable rather than as success.
+at download time. An open turn has no receipt yet. Once the turn completes, is
+stopped or is explicitly finished, its receipt preserves that outcome, including
+failed checks or review. A signed receipt is not necessarily an approval. A signing
+or storage failure is shown as unavailable rather than as success.
 
 Dashboard receipts identify `native_turn` instead of `loadout`. Their checks and
 review reflect the requirements you applied in **Team & budget**. Without those
@@ -165,6 +167,33 @@ key signed still verify with the old line; keep it in a trusted-keys file as lon
 want those receipts accepted.
 
 ## Downloading a dashboard turn's receipt
+
+Watch the receipt download from the actual 1.5.3 dashboard task, recorded in Dark mode.
+
+<figure class="dashboard-walkthrough">
+  <video id="dashboard-receipt-video" controls muted playsinline preload="metadata" width="1488" height="982"
+    poster="/assets/dashboard-flow-1.5.3/receipt.jpg" src="/assets/dashboard-flow-1.5.3/receipt.mp4"
+    aria-label="Downloading a signed dashboard receipt in Axocoatl 1.5.3">
+    <track kind="captions" src="/assets/dashboard-flow-1.5.3/receipt.captions.vtt" srclang="en" label="Receipt captions" default />
+    <track kind="chapters" src="/assets/dashboard-flow-1.5.3/receipt.chapters.vtt" srclang="en" label="Receipt chapters" />
+    <a href="/assets/dashboard-flow-1.5.3/receipt.mp4">Download the receipt excerpt</a>.
+  </video>
+  <figcaption>The receipt belongs to the corrected task shown in the full walkthrough. The earlier failed attempt and its partial receipt remain in the evidence.</figcaption>
+</figure>
+
+{/* FLOW_DOCS_RECEIPT_CHAPTERS_START */}
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-receipt-video" data-video-time="0" aria-label="Jump to The completed turn at 0:00">0:00</button> The completed turn
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-receipt-video" data-video-time="2.025666666666628" aria-label="Jump to Download the receipt at 0:02">0:02</button> Download the receipt
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-receipt-video" data-video-time="8.010666666666628" aria-label="Jump to Understand its coverage at 0:08">0:08</button> Understand its coverage
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-receipt-video" data-video-time="13.797666666666627" aria-label="Jump to Inspect the source change at 0:13">0:13</button> Inspect the source change
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-receipt-video" data-video-time="24.77466666666663" aria-label="Jump to Inspect the test change at 0:24">0:24</button> Inspect the test change
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-receipt-video" data-video-time="30.93666666666663" aria-label="Jump to Keep the signed receipt at 0:30">0:30</button> Keep the signed receipt
+{/* FLOW_DOCS_RECEIPT_CHAPTERS_END */}
+
+<script is:inline type="module" src="/assets/ax-video-chapters.js?v=20261029-flow"></script>
+
+[Watch the full dashboard task](/start/first-session/#watch-the-dashboard-flow) ·
+[Task and receipt verification](https://axocoatl.ai/assets/demo/dashboard-flow-1.5.3/artifact-evidence.json)
 
 Choose **Download signed receipt** below the finished native turn, or open
 **History → Signed receipt** for that turn. The download filename includes its turn

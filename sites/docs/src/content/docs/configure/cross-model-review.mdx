@@ -26,40 +26,43 @@ usage, verdict and findings stay in the Session.
 
 ## Watch a required review
 
-This recording follows an invoice-validation task in the actual Axocoatl 1.5
-dashboard, in Dark mode. A local GPT-OSS 20B Lead writes the change; the team requires
-`npm test` and a read-only review by local Qwen3-Coder 30B. This prepared demonstration
-is separate from the historical benchmark above and uses a different model pairing
-from the configuration example below.
+This excerpt shows the configured checks and required review from the full
+Axocoatl 1.5.3 dashboard walkthrough, recorded in Dark mode. It is a functional
+demonstration, separate from the historical benchmark above. The Lead uses local
+GPT-OSS 20B and the required reviewer uses local Qwen3-Coder 30B throughout this
+Session. The first required review failed; an operator correction went through
+another check and review cycle before approval. Waiting and navigation are shortened.
 
 <figure class="dashboard-walkthrough">
-  <video id="required-review-video" controls muted playsinline preload="metadata" width="1280" height="720"
-    poster="/assets/required-review-1.5/result.jpg"
-    src="/assets/required-review-1.5/required-review.mp4"
-    aria-label="An invoice-validation task with a required review in Axocoatl 1.5"
+  <video id="required-review-video" controls muted playsinline preload="metadata" width="1488" height="982"
+    poster="/assets/dashboard-flow-1.5.3/review.jpg"
+    src="/assets/dashboard-flow-1.5.3/review.mp4"
+    aria-label="Required checks and review in the Axocoatl 1.5.3 dashboard"
     aria-describedby="required-review-caption">
-    <track kind="captions" src="/assets/required-review-1.5/captions.vtt" srclang="en" label="Required review captions" default />
-    <track kind="chapters" src="/assets/required-review-1.5/chapters.vtt" srclang="en" label="Required review chapters" />
-    <a href="/assets/required-review-1.5/required-review.mp4">Download the required-review recording</a>.
+    <track kind="captions" src="/assets/dashboard-flow-1.5.3/review.captions.vtt" srclang="en" label="Review captions" default />
+    <track kind="chapters" src="/assets/dashboard-flow-1.5.3/review.chapters.vtt" srclang="en" label="Review chapters" />
+    <a href="/assets/dashboard-flow-1.5.3/review.mp4">Download the review excerpt</a>.
   </video>
   <figcaption id="required-review-caption">
-    Two requests, including a missed regression: after the first review approved,
-    independent checks caught an oversized price becoming Infinity. A follow-up
-    restored the finite-price guard; fresh checks and review passed. An AI assistant
-    operated the dashboard. Waits are trimmed and sped up. A reviewer is evidence,
-    not a guarantee.
+    The actual failed review and subsequent recovery. The corrected task was
+    approved in the required review's second round. Inspect the files and recorded
+    results; a review is evidence, not a guarantee.
   </figcaption>
 </figure>
 
-- <button type="button" class="dashboard-chapter-button" data-video-target="required-review-video" data-video-time="0" aria-controls="required-review-video" aria-label="Play from 0:00: Set requirements">0:00</button> — Set requirements.
-- <button type="button" class="dashboard-chapter-button" data-video-target="required-review-video" data-video-time="35.345" aria-controls="required-review-video" aria-label="Play from 0:35: Watch review">0:35</button> — Watch review.
-- <button type="button" class="dashboard-chapter-button" data-video-target="required-review-video" data-video-time="44.645" aria-controls="required-review-video" aria-label="Play from 0:45: Check independently">0:45</button> — Check independently.
-- <button type="button" class="dashboard-chapter-button" data-video-target="required-review-video" data-video-time="74.77" aria-controls="required-review-video" aria-label="Play from 1:15: Review corrected result">1:15</button> — Review corrected result.
+{/* FLOW_DOCS_REVIEW_CHAPTERS_START */}
+- <button type="button" class="dashboard-chapter-button" data-video-target="required-review-video" data-video-time="0" aria-label="Jump to Watch the agents at 0:00">0:00</button> Watch the agents
+- <button type="button" class="dashboard-chapter-button" data-video-target="required-review-video" data-video-time="6.2545" aria-label="Jump to Keep the failed attempt at 0:06">0:06</button> Keep the failed attempt
+- <button type="button" class="dashboard-chapter-button" data-video-target="required-review-video" data-video-time="20.0985" aria-label="Jump to Request the correction at 0:20">0:20</button> Request the correction
+- <button type="button" class="dashboard-chapter-button" data-video-target="required-review-video" data-video-time="47.62175" aria-label="Jump to Run checks and review again at 0:47">0:47</button> Run checks and review again
+- <button type="button" class="dashboard-chapter-button" data-video-target="required-review-video" data-video-time="76.87375" aria-label="Jump to Inspect the approved result at 1:16">1:16</button> Inspect the approved result
+{/* FLOW_DOCS_REVIEW_CHAPTERS_END */}
 
-<script is:inline type="module" src="/assets/ax-video-chapters.js?v=20261027-review-links"></script>
+<script is:inline type="module" src="/assets/ax-video-chapters.js?v=20261029-flow"></script>
 
-[Task evidence and artifact review](https://axocoatl.ai/assets/demo/required-review-1.5/artifact-evidence.json)
-· [Recording sources and limitations](https://axocoatl.ai/assets/demo/required-review-1.5/provenance.json)
+[Watch the full task and receipt download](/start/first-session/#watch-the-dashboard-flow) ·
+[Task and receipt verification](https://axocoatl.ai/assets/demo/dashboard-flow-1.5.3/artifact-evidence.json) ·
+[Recording sources and limitations](https://axocoatl.ai/assets/demo/dashboard-flow-1.5.3/provenance.json)
 
 ## 1. Define a reviewer on another model
 
