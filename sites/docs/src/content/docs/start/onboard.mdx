@@ -122,7 +122,8 @@ can write but cannot review, so their path sets up a reviewer on Ollama or OpenR
 
 ### Step 2: the sandbox
 
-Every Session and every `axocoatl run` uses a rootless Podman sandbox.
+Native Sessions and every `axocoatl run` use a rootless Podman sandbox.
+Compatibility Sessions can use the opt-in [E2B Cloud backend](/configure/sandboxes/#remote-e2b-backend).
 
 On **macOS**:
 
@@ -264,8 +265,9 @@ prints a line such as `✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPU
    this computer, and uses that one (`--ollama-url URL` without a terminal).
 2. **Version.** Native Sessions accept Ollama 0.40.6 and later. A later 0.40 release
    is accepted as is; a later 0.x release (0.41 or later) is accepted only once the
-   contract probes pass on each model, and onboarding, `doctor` and the run's receipt
-   say it is newer than the audited 0.40.6. An older Ollama is upgraded after asking
+   contract probes pass on each model, and onboarding, `doctor` and a loadout run's
+   receipt say it is newer than the audited 0.40.6. Native-turn receipts do not retain
+   runtime versions. An older Ollama is upgraded after asking
    (`brew upgrade ollama && brew services restart ollama`, or the pinned Linux
    installer). When the `ollama` on PATH is accepted but the server still runs an older
    version, the fix is a restart (`brew services restart ollama`), not another upgrade.
@@ -712,7 +714,7 @@ list of `{"name", "status": "ok|warn|fail", "detail", "fix"}`), `ready_for` and
 Each FAIL names its fix: the exact command, or `axocoatl onboard`, which makes the
 change after asking. `Ready for` lists `axocoatl run fix` for a local or OpenRouter
 writer and `axocoatl run fix-claude-code` or `fix-codex` for those writers. With
-`sandbox.backend: e2b`, Podman problems warn (workbench Sessions use E2B), but the
+`sandbox.backend: e2b`, Podman problems warn (compatibility Sessions use E2B), but the
 `axocoatl run` lines stay not ready until Podman is: runs always use it.
 
 ## Validate without starting the runtime

@@ -301,3 +301,19 @@ quality or performance claims about them.
    above, state the setup and limits next to them, and label anything not run through
    Axocoatl with its harness.
 5. Run `npm run check:content` in `sites/docs` and `node sites/marketing/scripts/validate.mjs`.
+
+
+## Sandbox and receipt-runtime scope correction (2026-10-30)
+
+Native Session repository tools and headless loadout runs use local rootless Podman.
+Compatibility Sessions can use the opt-in E2B Cloud backend. Public copy must not
+say that every Session uses Podman. The implementation distinguishes both backends
+in `crates/axocoatl-isolation/src/session_sandbox.rs`; the compatibility path is
+documented in `sites/docs/src/content/docs/configure/sandboxes.mdx`.
+
+Loadout receipts can retain the unaudited marker for accepted Ollama versions newer
+than the audited 0.40 line. Native dashboard-turn receipts do not retain runtime
+versions (`crates/axocoatl-daemon/src/bootstrap_native_receipts.rs`, program version
+projection), as stated in the receipt reference. Do not generalize the loadout
+marker to native-turn receipts. These corrections change copy only; they do not
+change sandbox behavior, version acceptance or receipt generation.

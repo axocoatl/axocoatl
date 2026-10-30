@@ -235,9 +235,11 @@ images come from Docker Hub, which limits pulls without a sign-in per address;
 `axocoatl onboard` sets these up where it can, asking before each change; see
 [Set up Axocoatl](/start/onboard/). What it needs:
 
-- **Rootless Podman**, for every Session and every `axocoatl run`. On macOS Podman runs
-  containers in a Linux virtual machine. On Apple silicon with Homebrew, onboarding
-  installs Podman (`brew install podman`) after asking; without Homebrew it points to
+- **Rootless Podman**, for native Sessions and every `axocoatl run`. Compatibility
+  Sessions can use the opt-in [E2B Cloud backend](/configure/sandboxes/#remote-e2b-backend).
+  On macOS Podman runs containers in a Linux virtual machine. On Apple silicon with
+  Homebrew, onboarding installs Podman (`brew install podman`) after asking; without
+  Homebrew it points to
   the installer from podman.io, and on an Intel Mac to the Podman 5.8 package. It then
   creates and starts the machine:
 
@@ -334,7 +336,7 @@ installs it after asking where it can (Homebrew on an Apple-silicon Mac; apt, dn
 pacman or zypper on Linux) and otherwise says what to install. Without a ready Podman
 runtime, `doctor` fails, and neither Sessions nor `axocoatl run` can use the default
 local sandbox. A deliberately
-configured E2B Cloud backend is the separate remote option for workbench Sessions.
+configured E2B Cloud backend is the separate remote option for compatibility Sessions.
 </Aside>
 
 ## Next

@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Documentation
+- Correct sandbox and receipt-runtime claims across public pages: native Sessions
+  use Podman, compatibility Sessions can opt into E2B Cloud, and the unaudited
+  Ollama runtime marker belongs to loadout receipts rather than dashboard-turn receipts.
 - Replace the current dashboard videos and screenshots across the marketing site,
   first-Session and review guides, receipt documentation and README with a Dark-mode
   1.5.3 task from workspace opening through signed receipt download. Keep the older

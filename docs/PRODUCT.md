@@ -22,9 +22,10 @@ or storage fails after an admitted loadout run finishes, the Outcome records
 `receipt_unavailable` without changing its verdict; verify the receipt separately.
 Behind the receipt are three pillars, stated as evidence rather than as the pitch:
 isolation built in, a complete record of every step, and any model per Agent, local or
-hosted. Each of those is a mechanism, not an adjective: Session tools run in a
-rootless Podman container, read-only helpers are blocked from writing by the kernel or
-get no shell, write scopes are checked against digest-verified snapshots, the host runs
+hosted. Each of those is a mechanism, not an adjective: native Session repository tools
+run in a rootless Podman container (compatibility Sessions can opt into E2B Cloud),
+read-only helpers are blocked from writing by the kernel or get no shell, write scopes
+are checked against digest-verified snapshots, the host runs
 required checks on the exact final files, approved budgets are charged with actual
 usage, every model call, tool call, budget decision and check is recorded, and each
 Agent has its own provider and model. Public performance claims come only from measured

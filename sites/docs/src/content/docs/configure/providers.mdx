@@ -304,8 +304,9 @@ Native execution requires a loopback Ollama **0.40.6 or later** that reports
 cloud-disabled mode, and a local GGUF completion model. Axocoatl checks the exact model
 identity, loaded context, and capabilities during Team review and before inference.
 Later 0.40 releases are accepted; a later 0.x release (0.41 or later) is accepted only
-once the contract probes below pass on each model, and `doctor`, onboarding and a run's
-receipt say it is newer than the audited 0.40.6. Older versions (0.20.6 included, which
+once the contract probes below pass on each model, and `doctor`, onboarding and a
+loadout run's receipt say it is newer than the audited 0.40.6. Native-turn receipts do
+not retain runtime versions. Older versions (0.20.6 included, which
 earlier Axocoatl releases required), pre-releases, development builds, a new major
 release, remote routing, and a generic compatible server do not satisfy this native
 contract. The broader Ollama adapter remains available for compatibility execution.

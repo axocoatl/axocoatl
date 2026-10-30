@@ -6,7 +6,7 @@ page, doc, or post conflicts with current product fact, fix the fact source and 
 file together. The goal is consistency that compounds: every page reinforces every
 other page, and a year from now we still sound like ourselves.
 
-Last updated: 2026-10-29 (dashboard turn receipts; receipt positioning retained).
+Last updated: 2026-10-30 (sandbox and receipt-runtime claim scope; receipt positioning retained).
 
 ---
 
@@ -53,8 +53,9 @@ is correct, that the tests are good tests or that the review was right, and a ke
 copied from a data directory signs as well as the original. Never call a receipt
 "tamper-proof", "proof the code works" or a guarantee; say what it holds and which key signed
 it. Do not promise that every run has a receipt: pre-admission refusals have none,
-native dashboard turns sign retained evidence when the person downloads it, and
-loadout signing/storage failure records
+native dashboard turns sign retained evidence when the person downloads it. Runtime
+versions and the unaudited Ollama marker belong to loadout receipts; native-turn
+receipts do not retain runtime versions. Loadout signing/storage failure records
 `receipt_unavailable` without changing the run verdict. Likewise, required checks
 and review describe the fix family or an explicitly configured team, not every
 loadout. QA and audit have their own acceptance rules. Onboarding requires different
@@ -65,8 +66,8 @@ The three pillars are the evidence behind the receipt. They stay below the fold,
 evidence, not as the pitch; every page should reinforce one or more, each with its
 concrete facts:
 
-1. **Isolation built in.** Every Session's tools run in a rootless Podman container
-   (E2B Cloud is an explicit remote option on the compatibility path). Read-only
+1. **Isolation built in.** Native Session repository tools run in a rootless Podman
+   container. Compatibility Sessions can use the opt-in E2B Cloud backend. Read-only
    helpers cannot write: they get no file-writing tools and the kernel blocks their
    shell from writing or opening TCP connections (Landlock, Linux 6.7 or later);
    otherwise they get no shell. Per-Agent write

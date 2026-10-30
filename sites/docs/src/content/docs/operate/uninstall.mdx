@@ -29,9 +29,9 @@ axocoatl service uninstall
 
 ## 2. Remove what it made in Podman
 
-Sessions and runs use Podman containers and volumes whose names start with `axo-`, and
-images named `localhost/axocoatl-…` (the egress proxy, the browser and the Claude Code and
-Codex images). With the daemon stopped:
+Local Sessions and loadout runs use Podman containers and volumes whose names start
+with `axo-`, and images named `localhost/axocoatl-…` (the egress proxy, the browser,
+Claude Code and Codex images). With the daemon stopped:
 
 ```sh
 podman ps -aq --filter name='^axo-' | xargs -r podman rm -f
